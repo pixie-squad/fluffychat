@@ -3134,5 +3134,14 @@
     "removeAdminRights": "Remove admin rights",
     "powerLevel": "Power level",
     "setPowerLevelDescription": "Power levels define what a member is allowed to do in this room and usually range between 0 and 100.",
+    "myProfile": "My profile",
+    "profileBackgroundColor": "Background color",
+    "profileEmojiStatus": "Emoji status",
+    "profileFeaturedChannel": "Featured channel",
+    "profileBio": "Bio",
+    "profilePickImage": "Pick image",
+    "profileActionMessage": "message",
+    "profileActionMute": "mute",
+    "profileActionCall": "call",
     "owner": "Owner"
 }

@@ -19,6 +19,7 @@ import 'package:fluffychat/utils/string_color.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/member_actions_popup_menu_button.dart';
+import 'package:fluffychat/widgets/profile_emoji_status_icon.dart';
 import '../../../config/app_config.dart';
 import 'message_content.dart';
 import 'message_reactions.dart';
@@ -411,7 +412,7 @@ class Message extends StatelessWidget {
                                                                 .onPrimaryContainer,
                                                           ),
                                                         ),
-                                                      Expanded(
+                                                      Flexible(
                                                         child: FutureBuilder<User?>(
                                                           future: event
                                                               .fetchSenderUser(),
@@ -461,6 +462,16 @@ class Message extends StatelessWidget {
                                                             );
                                                           },
                                                         ),
+                                                      ),
+                                                      ProfileEmojiStatusIcon(
+                                                        userId: event.senderId,
+                                                        client: event.room.client,
+                                                        size: 13,
+                                                        padding:
+                                                            const EdgeInsets.only(
+                                                              left: 4,
+                                                              bottom: 1,
+                                                            ),
                                                       ),
                                                     ],
                                                   ),

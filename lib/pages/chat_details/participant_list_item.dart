@@ -6,6 +6,7 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/name_gradients.dart';
 import 'package:fluffychat/widgets/member_actions_popup_menu_button.dart';
+import 'package:fluffychat/widgets/profile_emoji_status_icon.dart';
 import '../../widgets/avatar.dart';
 
 class ParticipantListItem extends StatelessWidget {
@@ -38,16 +39,30 @@ class ParticipantListItem extends StatelessWidget {
       title: Row(
         children: <Widget>[
           Expanded(
-            child: GradientDisplayName(
-              userId: user.id,
-              text: user.calcDisplayname(),
-              client: user.room.client,
-              overflow: TextOverflow.ellipsis,
+            child: Row(
+              children: [
+                Flexible(
+                  child: GradientDisplayName(
+                    userId: user.id,
+                    text: user.calcDisplayname(),
+                    client: user.room.client,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                ProfileEmojiStatusIcon(
+                  userId: user.id,
+                  client: user.room.client,
+                  size: 15,
+                  padding: const EdgeInsets.only(left: 4, right: 2, bottom: 1),
+                ),
+              ],
             ),
           ),
           if (permissionBatch.isNotEmpty)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              margin: const EdgeInsets.only(left: 4),
               decoration: BoxDecoration(
                 color: user.powerLevel >= 100
                     ? theme.colorScheme.tertiary

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:matrix/matrix.dart';
 
+import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/string_color.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:fluffychat/widgets/presence_builder.dart';
@@ -20,6 +21,8 @@ class Avatar extends StatelessWidget {
   final ShapeBorder? shapeBorder;
   final Color? backgroundColor;
   final Color? textColor;
+  final bool showOfflinePresenceDot;
+  final bool showPresenceTooltip;
 
   const Avatar({
     this.mxContent,
@@ -34,6 +37,8 @@ class Avatar extends StatelessWidget {
     this.icon,
     this.backgroundColor,
     this.textColor,
+    this.showOfflinePresenceDot = false,
+    this.showPresenceTooltip = false,
     super.key,
   });
 
@@ -111,7 +116,8 @@ class Avatar extends StatelessWidget {
             builder: (context, presence) {
               if (presence == null ||
                   (presence.presence == PresenceType.offline &&
-                      presence.lastActiveTimestamp == null)) {
+                      presence.lastActiveTimestamp == null &&
+                      !showOfflinePresenceDot)) {
                 return const SizedBox.shrink();
               }
               final dotColor = presence.presence.isOnline
@@ -119,30 +125,43 @@ class Avatar extends StatelessWidget {
                   : presence.presence.isUnavailable
                   ? Colors.orange
                   : Colors.grey;
-              return Positioned(
-                bottom: -3,
-                right: -3,
+              final l10n = L10n.of(context);
+              final presenceTooltip = presence.presence.isOnline
+                  ? l10n.online
+                  : presence.presence.isUnavailable
+                  ? l10n.unavailable
+                  : l10n.offline;
+              // Place dot center on the circle edge at the 45° diagonal.
+              // For a circle of diameter `size`, the offset from the
+              // corner is  size/2 * (1 - cos(45°)) ≈ size * 0.146.
+              // Subtract half the dot container width (8) so the
+              // Positioned edge-offset keeps the center on the arc.
+              final dotInset = (size * 0.146 - 8).clamp(0.0, size * 0.5);
+              Widget dot = Container(
+                width: 16,
+                height: 16,
+                decoration: BoxDecoration(
+                  color: presenceBackgroundColor ?? theme.colorScheme.surface,
+                  borderRadius: BorderRadius.circular(32),
+                ),
+                alignment: Alignment.center,
                 child: Container(
-                  width: 16,
-                  height: 16,
+                  width: 10,
+                  height: 10,
                   decoration: BoxDecoration(
-                    color: presenceBackgroundColor ?? theme.colorScheme.surface,
-                    borderRadius: BorderRadius.circular(32),
-                  ),
-                  alignment: Alignment.center,
-                  child: Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: dotColor,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        width: 1,
-                        color: theme.colorScheme.surface,
-                      ),
-                    ),
+                    color: dotColor,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(width: 1, color: theme.colorScheme.surface),
                   ),
                 ),
+              );
+              if (showPresenceTooltip) {
+                dot = Tooltip(message: presenceTooltip, child: dot);
+              }
+              return Positioned(
+                bottom: dotInset,
+                right: dotInset,
+                child: dot,
               );
             },
           ),

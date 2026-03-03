@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"RawKeyboardListener\\\\|KeyboardListener\\\\|LogicalKeyboardKey\\\\|Control.v\\\\|Cmd.v\\\\|paste\\\\|onKey\" /c/Users/Melted/Desktop/fluffychat/lib/pages/chat/*.dart)"
+    ]
+  }
+}

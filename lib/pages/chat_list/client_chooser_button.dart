@@ -7,8 +7,10 @@ import 'package:url_launcher/url_launcher_string.dart';
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/user_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
+import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import '../../utils/fluffy_share.dart';
 import 'chat_list.dart';
@@ -36,6 +38,16 @@ class ClientChooserButton extends StatelessWidget {
             const Icon(Icons.group_add_outlined),
             const SizedBox(width: 18),
             Text(L10n.of(context).createGroup),
+          ],
+        ),
+      ),
+      PopupMenuItem(
+        value: SettingsAction.myProfile,
+        child: Row(
+          children: [
+            const Icon(Icons.person_outline),
+            const SizedBox(width: 18),
+            Text(L10n.of(context).myProfile),
           ],
         ),
       ),
@@ -235,6 +247,15 @@ class ClientChooserButton extends StatelessWidget {
         case SettingsAction.newGroup:
           context.go('/rooms/newgroup');
           break;
+        case SettingsAction.myProfile:
+          final profileResult = await showFutureLoadingDialog<Profile>(
+            context: context,
+            future: Matrix.of(context).client.fetchOwnProfile,
+          );
+          final profile = profileResult.result;
+          if (profile == null || !context.mounted) return;
+          await UserDialog.show(context: context, profile: profile);
+          break;
         case SettingsAction.invite:
           FluffyShare.shareInviteLink(context);
           break;
@@ -264,6 +285,7 @@ class ClientChooserButton extends StatelessWidget {
 enum SettingsAction {
   addAccount,
   newGroup,
+  myProfile,
   setStatus,
   invite,
   support,

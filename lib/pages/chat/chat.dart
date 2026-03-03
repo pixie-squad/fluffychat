@@ -12,6 +12,7 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:pasteboard/pasteboard.dart';
 import 'package:matrix/matrix.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
 
@@ -307,7 +308,17 @@ class ChatController extends State<ChatPageWithRoom>
     );
   }
 
+  bool _isPasting = false;
+
   KeyEventResult _customEnterKeyHandling(FocusNode node, KeyEvent evt) {
+    if (evt is KeyDownEvent &&
+        evt.logicalKey == LogicalKeyboardKey.keyV &&
+        (HardwareKeyboard.instance.isControlPressed ||
+            HardwareKeyboard.instance.isMetaPressed)) {
+      _handleClipboardPaste();
+      return KeyEventResult.ignored;
+    }
+
     if (!HardwareKeyboard.instance.isShiftPressed &&
         evt.logicalKey.keyLabel == 'Enter' &&
         AppSettings.sendOnEnter.value) {
@@ -345,6 +356,19 @@ class ChatController extends State<ChatPageWithRoom>
       return KeyEventResult.ignored;
     } else {
       return KeyEventResult.ignored;
+    }
+  }
+
+  Future<void> _handleClipboardPaste() async {
+    if (PlatformInfos.isMobile || _isPasting) return;
+    _isPasting = true;
+    try {
+      final imageBytes = await Pasteboard.image;
+      if (imageBytes != null && mounted) {
+        await sendImageFromClipBoard(imageBytes);
+      }
+    } finally {
+      _isPasting = false;
     }
   }
 
@@ -655,7 +679,9 @@ class ChatController extends State<ChatPageWithRoom>
     await showAdaptiveDialog(
       context: context,
       builder: (c) => SendFileDialog(
-        files: [XFile.fromData(image)],
+        files: [
+          XFile.fromData(image, name: 'clipboard-image.png', mimeType: 'image/png'),
+        ],
         room: room,
         outerContext: context,
         threadRootEventId: activeThreadId,
