@@ -4,6 +4,7 @@ import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/name_gradients.dart';
 import 'package:fluffychat/widgets/member_actions_popup_menu_button.dart';
 import '../../widgets/avatar.dart';
 
@@ -37,8 +38,10 @@ class ParticipantListItem extends StatelessWidget {
       title: Row(
         children: <Widget>[
           Expanded(
-            child: Text(
-              user.calcDisplayname(),
+            child: GradientDisplayName(
+              userId: user.id,
+              text: user.calcDisplayname(),
+              client: user.room.client,
               overflow: TextOverflow.ellipsis,
             ),
           ),

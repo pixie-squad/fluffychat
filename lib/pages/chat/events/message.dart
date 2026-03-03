@@ -14,6 +14,7 @@ import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/file_description.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:fluffychat/utils/name_gradients.dart';
 import 'package:fluffychat/utils/string_color.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/matrix.dart';
@@ -420,8 +421,10 @@ class Message extends StatelessWidget {
                                                                     ?.calcDisplayname() ??
                                                                 sender
                                                                     .calcDisplayname();
-                                                            return Text(
-                                                              displayname,
+                                                            return GradientDisplayName(
+                                                              userId: event.senderId,
+                                                              text: displayname,
+                                                              client: event.room.client,
                                                               style: TextStyle(
                                                                 fontSize: 11,
                                                                 fontWeight:

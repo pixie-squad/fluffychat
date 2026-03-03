@@ -21,6 +21,7 @@ import 'package:fluffychat/utils/show_update_snackbar.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:fluffychat/utils/name_gradients.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
@@ -699,6 +700,58 @@ class ChatListController extends State<ChatList>
         statusMsg: input,
       ),
     );
+  }
+
+  Future<void> setBio() async {
+    final client = Matrix.of(context).client;
+    // final currentPresence = await client.getProfileField(client.userID!, 'r.trd.bio');
+    final input = await showTextInputDialog(
+      useRootNavigator: false,
+      context: context,
+      title: 'set bio. Add l10n.',
+      message: 'leave empty to clear bio. Add l10n.',
+      // title: L10n.of(context).setBio,
+      // message: L10n.of(context).leaveEmptyToClearBio,
+      okLabel: L10n.of(context).ok,
+      cancelLabel: L10n.of(context).cancel,
+      // hintText: L10n.of(context).bioExampleMessage,
+      hintText: 'add l10n, for fuck\'s sake!',
+      maxLines: 6,
+      minLines: 1,
+      maxLength: 320,
+      // initialText: currentPresence['r.trd.bio'] as String? ?? 'hallo everynyan',
+      initialText: 'hallo everynyan',
+    );
+    if (input == null) return;
+    if (!mounted) return;
+    await showFutureLoadingDialog(
+      context: context,
+      future: () => client.setProfileField(
+        client.userID!,
+        'r.trd.bio',
+        {
+          'r.trd.bio': input
+        }
+      ),
+    );
+  }
+
+  Future<void> setNameGradient() async {
+    final client = Matrix.of(context).client;
+    final picked = await showGradientPicker(context);
+    if (picked == null) return;
+    if (!mounted) return;
+    final value =
+        picked.isEmpty ? null : picked.map((c) => c.toARGB32()).toList();
+    await showFutureLoadingDialog(
+      context: context,
+      future: () => client.setProfileField(
+        client.userID!,
+        nameGradientField,
+        {nameGradientField: value},
+      ),
+    );
+    gradientCache.invalidate(client.userID!);
   }
 
   bool waitForFirstSync = false;

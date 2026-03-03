@@ -20,6 +20,13 @@ add_executable(${BINARY_NAME} WIN32
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
 
+# Add preprocessor definitions for the build version.
+target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
+target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MAJOR=${FLUTTER_VERSION_MAJOR}")
+target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MINOR=${FLUTTER_VERSION_MINOR}")
+target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_PATCH=${FLUTTER_VERSION_PATCH}")
+target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_BUILD=${FLUTTER_VERSION_BUILD}")
+
 # Disable Windows macros that collide with C++ standard library functions.
 target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 
@@ -27,6 +34,23 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
+
+# Attempt to build native_imaging's Windows DLL before runner builds.
+set(NATIVE_IMAGING_BUILD_SCRIPT "${CMAKE_SOURCE_DIR}/../scripts/build-native-imaging-windows.ps1")
+if(EXISTS "${NATIVE_IMAGING_BUILD_SCRIPT}")
+  add_custom_command(
+    TARGET ${BINARY_NAME}
+    PRE_BUILD
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File "${NATIVE_IMAGING_BUILD_SCRIPT}"
+      -ProjectRoot "${CMAKE_SOURCE_DIR}/.."
+      -Configuration "$<CONFIG>"
+      -OutputDir "$<TARGET_FILE_DIR:${BINARY_NAME}>"
+    COMMENT "Preparing native_imaging Windows DLL (Debug only)"
+    VERBATIM
+  )
+else()
+  message(WARNING "native_imaging build script is missing: ${NATIVE_IMAGING_BUILD_SCRIPT}")
+endif()
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)

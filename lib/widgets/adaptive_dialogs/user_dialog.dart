@@ -11,6 +11,7 @@ import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:fluffychat/utils/name_gradients.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/presence_builder.dart';
 import '../../utils/url_launcher.dart';
@@ -86,11 +87,13 @@ class UserDialog extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: .start,
                       children: [
-                        Text(
-                          displayname,
+                        GradientDisplayName(
+                          userId: profile.userId,
+                          text: displayname,
+                          client: client,
                           maxLines: 1,
-                          overflow: .ellipsis,
-                          style: TextStyle(fontSize: 16),
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 16),
                         ),
                         const SizedBox(height: 8),
                         HoverBuilder(
@@ -161,32 +164,80 @@ class UserDialog extends StatelessWidget {
                   ),
                 ],
               ),
-
-              if (statusMsg != null)
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: 200),
-                  child: Scrollbar(
-                    thumbVisibility: true,
-                    trackVisibility: true,
-                    child: SingleChildScrollView(
-                      child: SelectableLinkify(
-                        text: statusMsg,
-                        textScaleFactor: MediaQuery.textScalerOf(
-                          context,
-                        ).scale(1),
-                        textAlign: TextAlign.start,
-                        options: const LinkifyOptions(humanize: false),
-                        linkStyle: TextStyle(
-                          color: theme.colorScheme.primary,
-                          decoration: TextDecoration.underline,
-                          decorationColor: theme.colorScheme.primary,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (statusMsg != null)
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: 200),
+                      child: Scrollbar(
+                        thumbVisibility: true,
+                        trackVisibility: true,
+                        child: SingleChildScrollView(
+                          child: SelectableLinkify(
+                            text: statusMsg,
+                            textScaleFactor: MediaQuery.textScalerOf(
+                              context,
+                            ).scale(1),
+                            textAlign: TextAlign.start,
+                            options: const LinkifyOptions(humanize: false),
+                            linkStyle: TextStyle(
+                              color: theme.colorScheme.primary,
+                              decoration: TextDecoration.underline,
+                              decorationColor: theme.colorScheme.primary,
+                            ),
+                            onOpen: (url) =>
+                                UrlLauncher(context, url.url).launchUrl(),
+                          ),
                         ),
-                        onOpen: (url) =>
-                            UrlLauncher(context, url.url).launchUrl(),
                       ),
                     ),
-                  ),
-                ),
+                    const SizedBox(height: 12),
+                    Divider(
+                      height: 1,
+                      thickness: 1,
+                      color: theme.dividerColor,
+                    ),
+                    const SizedBox(height: 12),
+                    FutureBuilder<Map<String, Object?>>(
+                        future: client.getProfileField(profile.userId, 'r.trd.bio'),
+                        builder: (context, snapshot) {
+                          final bio = snapshot.data?['r.trd.bio'] as String?;
+                          if (bio == null || bio.isEmpty) return const SizedBox.shrink();
+                          return Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surface,
+                              border: Border.all(color: theme.dividerColor),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxHeight: 200, maxWidth: 400),
+                              child: Scrollbar(
+                                thumbVisibility: true,
+                                trackVisibility: true,
+                                child: SingleChildScrollView(
+                                  child: SelectableLinkify(
+                                    text: bio,
+                                    textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
+                                    textAlign: TextAlign.start,
+                                    options: const LinkifyOptions(humanize: false),
+                                    linkStyle: TextStyle(
+                                      color: theme.colorScheme.primary,
+                                      decoration: TextDecoration.underline,
+                                      decorationColor: theme.colorScheme.primary,
+                                    ),
+                                    onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
+                                  ),
+                                ),
+                              )
+                            ),
+                          );
+                        },
+                    ),
+                ],
+              ),
+
               Row(
                 mainAxisAlignment: .spaceBetween,
                 spacing: 4,

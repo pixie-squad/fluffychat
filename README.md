@@ -106,6 +106,10 @@ flutter build windows --release
 flutter build macos --release
 ```
 
+* Windows Debug note:
+  - During `flutter run -d windows`, the runner now auto-attempts to build and copy `libImaging.dll` for `native_imaging`.
+  - If the DLL build or load fails, FluffyChat will continue with non-native image resizing (no crash, but no native thumbnail/resize acceleration).
+
 
 # Special thanks
 

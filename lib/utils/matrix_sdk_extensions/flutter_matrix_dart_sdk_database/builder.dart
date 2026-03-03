@@ -1,3 +1,4 @@
+import 'dart:ffi';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -6,6 +7,7 @@ import 'package:matrix/matrix.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqlite3/open.dart';
 import 'package:universal_html/html.dart' as html;
 
 import 'package:fluffychat/l10n/l10n.dart';
@@ -52,6 +54,9 @@ Future<DatabaseApi> flutterMatrixSdkDatabaseBuilder(String clientName) async {
   }
 }
 
+void _windowsFfiInit() =>
+    open.overrideForAll(() => DynamicLibrary.open('sqlite3.dll'));
+
 Future<MatrixSdkDatabase> _constructDatabase(String clientName) async {
   if (kIsWeb) {
     html.window.navigator.storage?.persist();
@@ -77,8 +82,11 @@ Future<MatrixSdkDatabase> _constructDatabase(String clientName) async {
   // fix dlopen for old Android
   await applyWorkaroundToOpenSqlCipherOnOldAndroidVersions();
   // import the SQLite / SQLCipher shared objects / dynamic libraries
+  // Use custom ffiInit to fix Windows DLL name (upstream matrix SDK
+  // tries to load 'libsqlcipher.dll' but sqlcipher_flutter_libs builds
+  // the library as 'sqlite3.dll' on Windows).
   final factory = createDatabaseFactoryFfi(
-    ffiInit: SQfLiteEncryptionHelper.ffiInit,
+    ffiInit: Platform.isWindows ? _windowsFfiInit : SQfLiteEncryptionHelper.ffiInit,
   );
 
   // required for [getDatabasesPath]

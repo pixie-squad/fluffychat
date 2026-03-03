@@ -6,6 +6,33 @@ import 'package:flutter/painting.dart';
 import 'package:matrix/matrix.dart';
 import 'package:native_imaging/native_imaging.dart' as native;
 
+bool? _nativeImagingAvailable;
+bool _nativeImagingWarningLogged = false;
+
+Future<bool> _ensureNativeImagingAvailable() async {
+  final cachedAvailability = _nativeImagingAvailable;
+  if (cachedAvailability != null) {
+    return cachedAvailability;
+  }
+
+  try {
+    await native.init();
+    _nativeImagingAvailable = true;
+    return true;
+  } catch (e, s) {
+    _nativeImagingAvailable = false;
+    if (!_nativeImagingWarningLogged) {
+      _nativeImagingWarningLogged = true;
+      Logs().w(
+        'native_imaging is unavailable. Falling back to non-native image resizing.',
+        e,
+        s,
+      );
+    }
+    return false;
+  }
+}
+
 (int, int) _scaleToBox(int width, int height, {required int boxSize}) {
   final fit = applyBoxFit(
     BoxFit.scaleDown,
@@ -18,7 +45,9 @@ import 'package:native_imaging/native_imaging.dart' as native;
 Future<MatrixImageFileResizedResponse?> customImageResizer(
   MatrixImageFileResizeArguments arguments,
 ) async {
-  await native.init();
+  if (!await _ensureNativeImagingAvailable()) {
+    return null;
+  }
 
   var imageBytes = arguments.bytes;
   String? blurhash;
@@ -88,6 +117,7 @@ Future<MatrixImageFileResizedResponse?> customImageResizer(
     }
   } catch (e, s) {
     Logs().e('Could not generate preview', e, s);
+    return null;
   }
 
   return MatrixImageFileResizedResponse(

@@ -50,6 +50,26 @@ class ClientChooserButton extends StatelessWidget {
         ),
       ),
       PopupMenuItem(
+        value: SettingsAction.setBio,
+        child: Row(
+          children: [
+            const Icon(Icons.edit_outlined),
+            const SizedBox(width: 18),
+            Text('set bio. TODO: l10n'),
+          ],
+        ),
+      ),
+      PopupMenuItem(
+        value: SettingsAction.setNameGradient,
+        child: Row(
+          children: [
+            const Icon(Icons.gradient_outlined),
+            const SizedBox(width: 18),
+            const Text('Name gradient'), // TODO: l10n
+          ],
+        ),
+      ),
+      PopupMenuItem(
         value: SettingsAction.invite,
         child: Row(
           children: [
@@ -230,6 +250,12 @@ class ClientChooserButton extends StatelessWidget {
         case SettingsAction.setStatus:
           controller.setStatus();
           break;
+        case SettingsAction.setBio:
+          controller.setBio();
+          break;
+        case SettingsAction.setNameGradient:
+          controller.setNameGradient();
+          break;
       }
     }
   }
@@ -243,4 +269,6 @@ enum SettingsAction {
   support,
   settings,
   archive,
+  setBio,
+  setNameGradient,
 }
