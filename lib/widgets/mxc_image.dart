@@ -119,6 +119,8 @@ class _MxcImageState extends State<MxcImage> {
       if (!mounted) return;
       await Future.delayed(widget.retryDuration);
       _tryLoad();
+    } catch (e, s) {
+      Logs().w('Unable to load mxc image', e, s);
     }
   }
 

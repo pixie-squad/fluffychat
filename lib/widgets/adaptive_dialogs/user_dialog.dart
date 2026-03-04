@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:go_router/go_router.dart';
@@ -10,14 +11,15 @@ import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/client_download_content_extension.dart';
+import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/file_selector.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/utils/name_gradients.dart';
+import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/profile_banner_style.dart';
 import 'package:fluffychat/utils/profile_card_fields.dart';
-import 'package:fluffychat/utils/client_manager.dart';
-import 'package:fluffychat/utils/client_download_content_extension.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
@@ -29,6 +31,8 @@ import '../future_loading_dialog.dart';
 import '../matrix.dart';
 import '../mxc_image_viewer.dart';
 
+enum UserDialogMode { view, edit }
+
 class UserDialog extends StatefulWidget {
   static Future<void> show({
     required BuildContext context,
@@ -37,44 +41,80 @@ class UserDialog extends StatefulWidget {
   }) => showAdaptiveDialog(
     context: context,
     barrierDismissible: true,
-    builder: (context) =>
-        UserDialog(profile, noProfileWarning: noProfileWarning),
+    builder: (context) => UserDialog(
+      profile,
+      noProfileWarning: noProfileWarning,
+      mode: UserDialogMode.view,
+    ),
+  );
+
+  static Future<void> showEdit({
+    required BuildContext context,
+    required Profile profile,
+    bool noProfileWarning = false,
+  }) => showAdaptiveDialog(
+    context: context,
+    barrierDismissible: true,
+    builder: (context) => UserDialog(
+      profile,
+      noProfileWarning: noProfileWarning,
+      mode: UserDialogMode.edit,
+    ),
   );
 
   final Profile profile;
   final bool noProfileWarning;
+  final UserDialogMode mode;
 
-  const UserDialog(this.profile, {this.noProfileWarning = false, super.key});
+  const UserDialog(
+    this.profile, {
+    this.noProfileWarning = false,
+    this.mode = UserDialogMode.view,
+    super.key,
+  });
 
   @override
   State<UserDialog> createState() => _UserDialogState();
 }
 
 class _UserDialogState extends State<UserDialog> {
+  late Profile _profile;
   ProfileCardFields _profileFields = const ProfileCardFields();
   bool _fieldsLoading = false;
   bool _copiedMxid = false;
   ProfileBannerStyle _bannerStyle = ProfileBannerStyle.fallback;
   int _bannerStyleRequestId = 0;
+  int _displayNameStyleVersion = 0;
 
   Client get _client => Matrix.of(context).client;
+  bool get _isEditMode => widget.mode == UserDialogMode.edit;
 
-  bool get _isSelf => widget.profile.userId == _client.userID;
+  bool get _isSelf => _profile.userId == _client.userID;
 
   String get _displayname =>
-      widget.profile.displayName ??
-      widget.profile.userId.localpart ??
+      _profile.displayName ??
+      _profile.userId.localpart ??
       L10n.of(context).user;
 
   @override
   void initState() {
     super.initState();
+    _profile = widget.profile;
     _reloadProfileFields();
+  }
+
+  @override
+  void didUpdateWidget(covariant UserDialog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.profile.userId != widget.profile.userId) {
+      _profile = widget.profile;
+      _reloadProfileFields();
+    }
   }
 
   Future<void> _reloadProfileFields() async {
     setState(() => _fieldsLoading = true);
-    final fields = await loadProfileCardFields(_client, widget.profile.userId);
+    final fields = await loadProfileCardFields(_client, _profile.userId);
     if (!mounted) return;
     setState(() {
       _profileFields = fields;
@@ -132,6 +172,214 @@ class _UserDialogState extends State<UserDialog> {
     final statusMsg = presence?.statusMsg?.trim();
     if (statusMsg == null || statusMsg.isEmpty) return null;
     return statusMsg;
+  }
+
+  Future<void> _reloadSelfProfile() async {
+    if (!_isSelf) return;
+    try {
+      final profile = await _client.fetchOwnProfile();
+      if (!mounted) return;
+      setState(() {
+        _profile = profile;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _openEditProfile() async {
+    if (!_isSelf || _isEditMode) return;
+    await UserDialog.showEdit(
+      context: context,
+      profile: _profile,
+      noProfileWarning: widget.noProfileWarning,
+    );
+    if (!mounted) return;
+    await _reloadSelfProfile();
+    await _reloadProfileFields();
+    if (!mounted) return;
+    setState(() {
+      _displayNameStyleVersion++;
+    });
+  }
+
+  Future<void> _setDisplaynameAction() async {
+    if (!_isSelf || !_isEditMode) return;
+    final input = await showTextInputDialog(
+      useRootNavigator: false,
+      context: context,
+      title: L10n.of(context).editDisplayname,
+      okLabel: L10n.of(context).ok,
+      cancelLabel: L10n.of(context).cancel,
+      initialText: _displayname,
+    );
+    if (input == null) return;
+
+    final result = await showFutureLoadingDialog(
+      context: context,
+      future: () => _client.setProfileField(_client.userID!, 'displayname', {
+        'displayname': input,
+      }),
+    );
+    if (result.error != null) return;
+
+    await _reloadSelfProfile();
+  }
+
+  Future<void> _setStatusAction({required String? initialText}) async {
+    if (!_isSelf || !_isEditMode) return;
+    final input = await showTextInputDialog(
+      useRootNavigator: false,
+      context: context,
+      title: L10n.of(context).setStatus,
+      message: L10n.of(context).leaveEmptyToClearStatus,
+      okLabel: L10n.of(context).ok,
+      cancelLabel: L10n.of(context).cancel,
+      hintText: L10n.of(context).statusExampleMessage,
+      maxLines: 6,
+      minLines: 1,
+      maxLength: 255,
+      initialText: initialText,
+    );
+    if (input == null) return;
+    await showFutureLoadingDialog(
+      context: context,
+      future: () => _client.setPresence(
+        _client.userID!,
+        PresenceType.online,
+        statusMsg: input,
+      ),
+    );
+  }
+
+  Future<void> _setBioAction() async {
+    if (!_isSelf || !_isEditMode) return;
+    final input = await showTextInputDialog(
+      useRootNavigator: false,
+      context: context,
+      title: L10n.of(context).profileBio,
+      okLabel: L10n.of(context).ok,
+      cancelLabel: L10n.of(context).cancel,
+      maxLines: 6,
+      minLines: 1,
+      maxLength: 320,
+      initialText: _profileFields.bio,
+    );
+    if (input == null) return;
+    final trimmed = input.trim();
+    final result = await showFutureLoadingDialog(
+      context: context,
+      future: () async {
+        if (trimmed.isEmpty) {
+          await _client.deleteProfileField(_client.userID!, profileBioField);
+          return;
+        }
+        await _client.setProfileField(_client.userID!, profileBioField, {
+          profileBioField: input,
+        });
+      },
+    );
+    if (result.error != null || !mounted) return;
+    await _reloadProfileFields();
+  }
+
+  Future<void> _setNameGradientAction() async {
+    if (!_isSelf || !_isEditMode) return;
+    final picked = await showGradientPicker(context);
+    if (picked == null) return;
+    if (!mounted) return;
+
+    final colors = picked.colors.isEmpty
+        ? null
+        : picked.colors.map((c) => c.toARGB32()).toList();
+    final value = colors == null
+        ? null
+        : picked.animated
+        ? {'c': colors, 'a': true}
+        : colors;
+    final result = await showFutureLoadingDialog(
+      context: context,
+      future: () =>
+          _client.setProfileField(_client.userID!, nameGradientField, {
+            nameGradientField: value,
+            if (value != null && picked.animated)
+              nameGradientAnimatedField: true,
+          }),
+    );
+
+    if (result.error != null || !mounted) return;
+    gradientCache.invalidate(_client.userID!);
+    setState(() {
+      _displayNameStyleVersion++;
+    });
+  }
+
+  Future<void> _setAvatarAction() async {
+    if (!_isSelf || !_isEditMode) return;
+    final actions = <AdaptiveModalAction<_ProfileAvatarAction>>[
+      if (PlatformInfos.isMobile)
+        AdaptiveModalAction(
+          value: _ProfileAvatarAction.camera,
+          label: L10n.of(context).openCamera,
+          isDefaultAction: true,
+          icon: const Icon(Icons.camera_alt_outlined),
+        ),
+      AdaptiveModalAction(
+        value: _ProfileAvatarAction.file,
+        label: L10n.of(context).openGallery,
+        icon: const Icon(Icons.photo_outlined),
+      ),
+      if (_profile.avatarUrl != null)
+        AdaptiveModalAction(
+          value: _ProfileAvatarAction.remove,
+          label: L10n.of(context).removeYourAvatar,
+          isDestructive: true,
+          icon: const Icon(Icons.delete_outlined),
+        ),
+    ];
+
+    final action = actions.length == 1
+        ? actions.single.value
+        : await showModalActionPopup<_ProfileAvatarAction>(
+            context: context,
+            title: L10n.of(context).changeYourAvatar,
+            cancelLabel: L10n.of(context).cancel,
+            actions: actions,
+            useRootNavigator: false,
+          );
+    if (action == null) return;
+
+    if (action == _ProfileAvatarAction.remove) {
+      final result = await showFutureLoadingDialog(
+        context: context,
+        future: () => _client.setAvatar(null),
+      );
+      if (result.error != null) return;
+      await _reloadSelfProfile();
+      return;
+    }
+
+    MatrixFile file;
+    if (PlatformInfos.isMobile) {
+      final result = await ImagePicker().pickImage(
+        source: action == _ProfileAvatarAction.camera
+            ? ImageSource.camera
+            : ImageSource.gallery,
+        imageQuality: 50,
+      );
+      if (result == null) return;
+      file = MatrixFile(bytes: await result.readAsBytes(), name: result.path);
+    } else {
+      final result = await selectFiles(context, type: FileType.image);
+      if (result.isEmpty) return;
+      final picked = result.first;
+      file = MatrixFile(bytes: await picked.readAsBytes(), name: picked.name);
+    }
+
+    final success = await showFutureLoadingDialog(
+      context: context,
+      future: () => _client.setAvatar(file),
+    );
+    if (success.error != null) return;
+    await _reloadSelfProfile();
   }
 
   Color _resolveMonochromeContrastForeground(
@@ -196,7 +444,7 @@ class _UserDialogState extends State<UserDialog> {
   }
 
   Future<void> _copyMxid() async {
-    await Clipboard.setData(ClipboardData(text: widget.profile.userId));
+    await Clipboard.setData(ClipboardData(text: _profile.userId));
     if (!mounted) return;
     setState(() => _copiedMxid = true);
     Future<void>.delayed(const Duration(seconds: 2), () {
@@ -207,11 +455,10 @@ class _UserDialogState extends State<UserDialog> {
   Future<Room> _resolveDirectRoom() async {
     final client = _client;
     final existingDirectRoomId = client.getDirectChatFromUserId(
-      widget.profile.userId,
+      _profile.userId,
     );
     final roomId =
-        existingDirectRoomId ??
-        await client.startDirectChat(widget.profile.userId);
+        existingDirectRoomId ?? await client.startDirectChat(_profile.userId);
 
     var room = client.getRoomById(roomId);
     if (room == null) {
@@ -229,7 +476,7 @@ class _UserDialogState extends State<UserDialog> {
     final router = GoRouter.of(context);
     final roomIdResult = await showFutureLoadingDialog<String>(
       context: context,
-      future: () => _client.startDirectChat(widget.profile.userId),
+      future: () => _client.startDirectChat(_profile.userId),
     );
     final roomId = roomIdResult.result;
     if (roomId == null || !mounted) return;
@@ -300,17 +547,14 @@ class _UserDialogState extends State<UserDialog> {
 
     await showFutureLoadingDialog(
       context: context,
-      future: () => _client.reportUser(widget.profile.userId, reason),
+      future: () => _client.reportUser(_profile.userId, reason),
     );
   }
 
   void _openBlockScreen() {
     final router = GoRouter.of(context);
     Navigator.of(context).pop();
-    router.go(
-      '/rooms/settings/security/ignorelist',
-      extra: widget.profile.userId,
-    );
+    router.go('/rooms/settings/security/ignorelist', extra: _profile.userId);
   }
 
   Future<void> _openMoreMenu() async {
@@ -356,7 +600,7 @@ class _UserDialogState extends State<UserDialog> {
         return;
       case _UserMoreAction.share:
         await FluffyShare.share(
-          'https://matrix.to/#/${widget.profile.userId}',
+          'https://matrix.to/#/${_profile.userId}',
           context,
         );
         return;
@@ -693,34 +937,67 @@ class _UserDialogState extends State<UserDialog> {
   Widget _buildBioSection(BuildContext context) {
     final bio = _profileFields.bio;
     final theme = Theme.of(context);
+    final isEditable = _isSelf && _isEditMode;
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      spacing: 8,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                L10n.of(context).profileBio,
+                style: theme.textTheme.labelLarge,
+              ),
+            ),
+            if (isEditable)
+              Icon(
+                Icons.edit_outlined,
+                size: 16,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+          ],
+        ),
+        if (bio == null || isEditable)
+          Text(
+            bio ?? '—',
+            style: theme.textTheme.bodyMedium,
+            maxLines: isEditable ? 4 : null,
+            overflow: isEditable ? TextOverflow.ellipsis : null,
+          )
+        else
+          SelectableLinkify(
+            text: bio,
+            textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
+            textAlign: TextAlign.start,
+            options: const LinkifyOptions(humanize: false),
+            linkStyle: TextStyle(
+              color: theme.colorScheme.primary,
+              decoration: TextDecoration.underline,
+              decorationColor: theme.colorScheme.primary,
+            ),
+            onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
+          ),
+      ],
+    );
 
-    return Container(
+    final container = Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
         color: theme.colorScheme.surfaceContainerLow,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        spacing: 8,
-        children: [
-          Text(L10n.of(context).profileBio, style: theme.textTheme.labelLarge),
-          if (bio == null)
-            Text('—', style: theme.textTheme.bodyMedium)
-          else
-            SelectableLinkify(
-              text: bio,
-              textScaleFactor: MediaQuery.textScalerOf(context).scale(1),
-              textAlign: TextAlign.start,
-              options: const LinkifyOptions(humanize: false),
-              linkStyle: TextStyle(
-                color: theme.colorScheme.primary,
-                decoration: TextDecoration.underline,
-                decorationColor: theme.colorScheme.primary,
-              ),
-              onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
-            ),
-        ],
+      child: content,
+    );
+
+    if (!isEditable) return container;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _setBioAction,
+        child: container,
       ),
     );
   }
@@ -743,7 +1020,7 @@ class _UserDialogState extends State<UserDialog> {
             children: [
               Expanded(
                 child: SelectableText(
-                  widget.profile.userId,
+                  _profile.userId,
                   maxLines: 1,
                   style: theme.textTheme.bodyMedium,
                 ),
@@ -758,6 +1035,32 @@ class _UserDialogState extends State<UserDialog> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildNameGradientSection(BuildContext context) {
+    if (!_isSelf || !_isEditMode) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _setNameGradientAction,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              const Icon(Icons.gradient_outlined),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text('Name gradient', style: theme.textTheme.titleSmall),
+              ),
+              const Icon(Icons.chevron_right),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -821,7 +1124,7 @@ class _UserDialogState extends State<UserDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final avatar = widget.profile.avatarUrl;
+    final avatar = _profile.avatarUrl;
     final screenSize = MediaQuery.sizeOf(context);
     final maxDialogWidth = (screenSize.width - 24).clamp(320.0, 760.0);
     final targetDialogWidth = (screenSize.width * 0.35).clamp(320.0, 620.0);
@@ -847,7 +1150,7 @@ class _UserDialogState extends State<UserDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
       insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       content: PresenceBuilder(
-        userId: widget.profile.userId,
+        userId: _profile.userId,
         client: _client,
         builder: (context, presence) {
           final bannerUri = _profileFields.bannerMxc;
@@ -882,6 +1185,16 @@ class _UserDialogState extends State<UserDialog> {
           );
 
           final statusText = _statusText(presence);
+          final statusPlaceholder =
+              _isSelf && _isEditMode && statusText == null;
+          final displayedStatusText =
+              statusText ??
+              (statusPlaceholder
+                  ? L10n.of(context).statusExampleMessage
+                  : null);
+          final displayedStatusForeground = statusPlaceholder
+              ? statusForeground.withAlpha(180)
+              : statusForeground;
           final emojiStatusUri = _profileFields.emojiStatusMxc;
 
           return SizedBox(
@@ -919,7 +1232,7 @@ class _UserDialogState extends State<UserDialog> {
                                 spacing: 8,
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  if (_isSelf)
+                                  if (_isSelf && _isEditMode)
                                     _HeaderIconButton(
                                       tooltip:
                                           '${L10n.of(context).profileBackgroundColor} / ${L10n.of(context).profileBanner}',
@@ -961,8 +1274,10 @@ class _UserDialogState extends State<UserDialog> {
                                         ],
                                       ),
                                     ),
-                                  if (_isSelf ||
-                                      _profileFields.emojiStatusMxc != null)
+                                  if ((_isSelf && _isEditMode) ||
+                                      (!_isSelf &&
+                                          _profileFields.emojiStatusMxc !=
+                                              null))
                                     _HeaderIconButton(
                                       tooltip: L10n.of(
                                         context,
@@ -970,7 +1285,7 @@ class _UserDialogState extends State<UserDialog> {
                                       foreground: actionForeground,
                                       background: actionBackground,
                                       border: actionBorder,
-                                      onTap: _isSelf
+                                      onTap: _isSelf && _isEditMode
                                           ? _showEmojiStatusMenu
                                           : null,
                                       icon:
@@ -991,6 +1306,18 @@ class _UserDialogState extends State<UserDialog> {
                                                 isThumbnail: true,
                                               ),
                                             ),
+                                    ),
+                                  if (_isSelf && !_isEditMode)
+                                    _HeaderIconButton(
+                                      tooltip: L10n.of(context).edit,
+                                      foreground: actionForeground,
+                                      background: actionBackground,
+                                      border: actionBorder,
+                                      onTap: _openEditProfile,
+                                      icon: const Icon(
+                                        Icons.edit_outlined,
+                                        size: 18,
+                                      ),
                                     ),
                                   if (_fieldsLoading)
                                     SizedBox(
@@ -1015,77 +1342,137 @@ class _UserDialogState extends State<UserDialog> {
                             ],
                           ),
                           const SizedBox(height: 10),
-                          Avatar(
-                            mxContent: avatar,
-                            name: _displayname,
-                            size: avatarSize,
-                            presenceUserId: widget.profile.userId,
-                            presenceBackgroundColor: headerColor,
-                            showOfflinePresenceDot: true,
-                            showPresenceTooltip: true,
-                            presenceTooltipBuilder: (_, dotPresence) =>
-                                _presenceDotTooltipText(dotPresence),
-                            onTap: avatar != null
-                                ? () => showDialog(
-                                    context: context,
-                                    builder: (_) => MxcImageViewer(avatar),
-                                  )
-                                : null,
-                          ),
-                          SizedBox(height: 14 * scale),
-                          Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 14 * scale,
-                              vertical: 9 * scale,
-                            ),
-                            decoration: BoxDecoration(
-                              color: pillBackground,
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                color: namePillStyle.border,
-                                width: 1.1,
+                          Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Avatar(
+                                mxContent: avatar,
+                                name: _displayname,
+                                size: avatarSize,
+                                presenceUserId: _profile.userId,
+                                presenceBackgroundColor: headerColor,
+                                showOfflinePresenceDot: true,
+                                showPresenceTooltip: true,
+                                presenceTooltipBuilder: (_, dotPresence) =>
+                                    _presenceDotTooltipText(dotPresence),
+                                onTap: avatar != null
+                                    ? () => showDialog(
+                                        context: context,
+                                        builder: (_) => MxcImageViewer(avatar),
+                                      )
+                                    : null,
                               ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: GradientDisplayName(
-                                    userId: widget.profile.userId,
-                                    text: _displayname,
-                                    client: _client,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: namePillStyle.fallbackTextColor,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 16 * scale,
+                              if (_isSelf && _isEditMode)
+                                Positioned(
+                                  right: 0,
+                                  bottom: 0,
+                                  child: SizedBox.square(
+                                    dimension: 34,
+                                    child: FloatingActionButton.small(
+                                      heroTag: null,
+                                      elevation: 2,
+                                      onPressed: _setAvatarAction,
+                                      child: const Icon(
+                                        Icons.camera_alt_outlined,
+                                        size: 18,
+                                      ),
                                     ),
                                   ),
                                 ),
-                                if (emojiStatusUri != null) ...[
-                                  SizedBox(width: 6 * scale),
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(999),
-                                    child: MxcImage(
-                                      uri: emojiStatusUri,
-                                      width: 16 * scale,
-                                      height: 16 * scale,
-                                      fit: BoxFit.cover,
-                                      isThumbnail: true,
-                                    ),
+                            ],
+                          ),
+                          SizedBox(height: 14 * scale),
+                          Material(
+                            color: pillBackground,
+                            borderRadius: BorderRadius.circular(999),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(999),
+                              onTap: _isSelf && _isEditMode
+                                  ? _setDisplaynameAction
+                                  : null,
+                              child: Container(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: 14 * scale,
+                                  vertical: 9 * scale,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.transparent,
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(
+                                    color: namePillStyle.border,
+                                    width: 1.1,
                                   ),
-                                ],
-                              ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Flexible(
+                                      child: GradientDisplayName(
+                                        key: ValueKey(
+                                          '${_profile.userId}:$_displayNameStyleVersion',
+                                        ),
+                                        userId: _profile.userId,
+                                        text: _displayname,
+                                        client: _client,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color:
+                                              namePillStyle.fallbackTextColor,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 16 * scale,
+                                        ),
+                                      ),
+                                    ),
+                                    if (emojiStatusUri != null) ...[
+                                      SizedBox(width: 6 * scale),
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
+                                        child: MxcImage(
+                                          uri: emojiStatusUri,
+                                          width: 16 * scale,
+                                          height: 16 * scale,
+                                          fit: BoxFit.cover,
+                                          isThumbnail: true,
+                                        ),
+                                      ),
+                                    ],
+                                    if (_isSelf && _isEditMode) ...[
+                                      SizedBox(width: 6 * scale),
+                                      Icon(
+                                        Icons.edit_outlined,
+                                        size: 16 * scale,
+                                        color: namePillStyle.fallbackTextColor
+                                            .withAlpha(200),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
-                          if (statusText != null) ...[
+                          if (displayedStatusText != null) ...[
                             SizedBox(height: 10 * scale),
-                            _buildStatusPill(
-                              text: statusText,
-                              icon: Icons.circle,
-                              background: pillBackground,
-                              foreground: statusForeground,
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(999),
+                                onTap: _isSelf && _isEditMode
+                                    ? () => _setStatusAction(
+                                        initialText: statusText ?? '',
+                                      )
+                                    : null,
+                                child: _buildStatusPill(
+                                  text: displayedStatusText,
+                                  icon: _isSelf && _isEditMode
+                                      ? Icons.edit_outlined
+                                      : Icons.circle,
+                                  background: pillBackground,
+                                  foreground: displayedStatusForeground,
+                                ),
+                              ),
                             ),
                           ],
                           if (widget.noProfileWarning) ...[
@@ -1097,44 +1484,46 @@ class _UserDialogState extends State<UserDialog> {
                               icon: Icons.warning_amber_outlined,
                             ),
                           ],
-                          SizedBox(height: 14 * scale),
-                          Row(
-                            spacing: 10 * scale,
-                            children: [
-                              _ProfileActionButton(
-                                label: L10n.of(context).profileActionMessage,
-                                icon: Icons.chat_bubble_outline,
-                                foreground: actionForeground,
-                                background: actionBackground,
-                                border: actionBorder,
-                                onTap: _isSelf ? null : _openMessage,
-                              ),
-                              _ProfileActionButton(
-                                label: L10n.of(context).profileActionMute,
-                                icon: Icons.notifications_off_outlined,
-                                foreground: actionForeground,
-                                background: actionBackground,
-                                border: actionBorder,
-                                onTap: _isSelf ? null : _toggleMute,
-                              ),
-                              _ProfileActionButton(
-                                label: L10n.of(context).profileActionCall,
-                                icon: Icons.call_outlined,
-                                foreground: actionForeground,
-                                background: actionBackground,
-                                border: actionBorder,
-                                onTap: _isSelf ? null : _callAction,
-                              ),
-                              _ProfileActionButton(
-                                label: L10n.of(context).more.toLowerCase(),
-                                icon: Icons.more_horiz,
-                                foreground: actionForeground,
-                                background: actionBackground,
-                                border: actionBorder,
-                                onTap: _openMoreMenu,
-                              ),
-                            ],
-                          ),
+                          if (!_isEditMode) ...[
+                            SizedBox(height: 14 * scale),
+                            Row(
+                              spacing: 10 * scale,
+                              children: [
+                                _ProfileActionButton(
+                                  label: L10n.of(context).profileActionMessage,
+                                  icon: Icons.chat_bubble_outline,
+                                  foreground: actionForeground,
+                                  background: actionBackground,
+                                  border: actionBorder,
+                                  onTap: _isSelf ? null : _openMessage,
+                                ),
+                                _ProfileActionButton(
+                                  label: L10n.of(context).profileActionMute,
+                                  icon: Icons.notifications_off_outlined,
+                                  foreground: actionForeground,
+                                  background: actionBackground,
+                                  border: actionBorder,
+                                  onTap: _isSelf ? null : _toggleMute,
+                                ),
+                                _ProfileActionButton(
+                                  label: L10n.of(context).profileActionCall,
+                                  icon: Icons.call_outlined,
+                                  foreground: actionForeground,
+                                  background: actionBackground,
+                                  border: actionBorder,
+                                  onTap: _isSelf ? null : _callAction,
+                                ),
+                                _ProfileActionButton(
+                                  label: L10n.of(context).more.toLowerCase(),
+                                  icon: Icons.more_horiz,
+                                  foreground: actionForeground,
+                                  background: actionBackground,
+                                  border: actionBorder,
+                                  onTap: _openMoreMenu,
+                                ),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -1145,6 +1534,8 @@ class _UserDialogState extends State<UserDialog> {
                           spacing: 12 * scale,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            if (_isSelf && _isEditMode)
+                              _buildNameGradientSection(context),
                             if (_profileFields.featuredChannel != null)
                               _buildFeaturedChannelSection(context),
                             _buildBioSection(context),
@@ -1443,6 +1834,8 @@ enum _BackgroundAppearanceAction { backgroundColor, banner }
 enum _BannerAction { pickImage, remove }
 
 enum _EmojiStatusAction { pickImage, remove }
+
+enum _ProfileAvatarAction { camera, file, remove }
 
 class _NamePillStyle {
   final Color background;

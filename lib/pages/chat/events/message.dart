@@ -3,14 +3,12 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:matrix/matrix.dart';
 import 'package:swipe_to_action/swipe_to_action.dart';
 
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/file_description.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
@@ -54,6 +52,17 @@ class Message extends StatelessWidget {
   final Set<String> bigEmojis;
   final List<Event>? albumEvents;
   final bool isAlbumContinuation;
+  final List<String> quickReactions;
+  final Future<void> Function(Event event, Offset globalPosition)
+  onOpenContextMenu;
+  final Future<void> Function(
+    Event event,
+    String reactionKey,
+    Set<String> sentReactions,
+  )
+  onSendReaction;
+  final Future<void> Function(Event event, Set<String> sentReactions)
+  onSendCustomReaction;
 
   const Message(
     this.event, {
@@ -82,6 +91,10 @@ class Message extends StatelessWidget {
     this.isCollapsed = false,
     this.albumEvents,
     this.isAlbumContinuation = false,
+    required this.quickReactions,
+    required this.onOpenContextMenu,
+    required this.onSendReaction,
+    required this.onSendCustomReaction,
     super.key,
   });
 
@@ -165,14 +178,15 @@ class Message extends StatelessWidget {
           ? hardCorner
           : roundedCorner,
     );
-    final noBubble = albumEvents != null ||
+    final noBubble =
+        albumEvents != null ||
         ({
-          MessageTypes.Video,
-          MessageTypes.Image,
-          MessageTypes.Sticker,
-        }.contains(event.messageType) &&
-        event.fileDescription == null &&
-        !event.redacted);
+              MessageTypes.Video,
+              MessageTypes.Image,
+              MessageTypes.Sticker,
+            }.contains(event.messageType) &&
+            event.fileDescription == null &&
+            !event.redacted);
 
     if (ownMessage) {
       color = displayEvent.status.isError
@@ -305,8 +319,8 @@ class Message extends StatelessWidget {
                                       : null,
                                   enableFeedback: !selected,
                                   onTap: longPressSelect
-                                      ? null
-                                      : () => onSelect(event),
+                                      ? () => onSelect(event)
+                                      : null,
                                   borderRadius: BorderRadius.circular(
                                     AppConfig.borderRadius / 2,
                                   ),
@@ -430,9 +444,12 @@ class Message extends StatelessWidget {
                                                                 sender
                                                                     .calcDisplayname();
                                                             return GradientDisplayName(
-                                                              userId: event.senderId,
+                                                              userId: event
+                                                                  .senderId,
                                                               text: displayname,
-                                                              client: event.room.client,
+                                                              client: event
+                                                                  .room
+                                                                  .client,
                                                               style: TextStyle(
                                                                 fontSize: 11,
                                                                 fontWeight:
@@ -472,7 +489,8 @@ class Message extends StatelessWidget {
                                                       ),
                                                       ProfileEmojiStatusIcon(
                                                         userId: event.senderId,
-                                                        client: event.room.client,
+                                                        client:
+                                                            event.room.client,
                                                         size: 13,
                                                         padding:
                                                             const EdgeInsets.only(
@@ -489,12 +507,22 @@ class Message extends StatelessWidget {
                                             left: 8,
                                           ),
                                           child: GestureDetector(
-                                            onLongPress: longPressSelect
+                                            onLongPressStart: longPressSelect
                                                 ? null
-                                                : () {
+                                                : (details) {
                                                     HapticFeedback.heavyImpact();
-                                                    onSelect(event);
+                                                    onOpenContextMenu(
+                                                      event,
+                                                      details.globalPosition,
+                                                    );
                                                   },
+                                            onSecondaryTapUp: longPressSelect
+                                                ? null
+                                                : (details) =>
+                                                      onOpenContextMenu(
+                                                        event,
+                                                        details.globalPosition,
+                                                      ),
                                             child: AnimatedOpacity(
                                               opacity: animateIn
                                                   ? 0
@@ -626,8 +654,7 @@ class Message extends StatelessWidget {
                                                                   );
                                                                 },
                                                           ),
-                                                        if (albumEvents !=
-                                                            null)
+                                                        if (albumEvents != null)
                                                           MediaAlbum(
                                                             events:
                                                                 albumEvents!,
@@ -736,7 +763,7 @@ class Message extends StatelessWidget {
                                                         child: Row(
                                                           mainAxisSize: .min,
                                                           children: [
-                                                            ...AppConfig.defaultReactions.map(
+                                                            ...quickReactions.map(
                                                               (
                                                                 emoji,
                                                               ) => IconButton(
@@ -769,14 +796,14 @@ class Message extends StatelessWidget {
                                                                           emoji,
                                                                         )
                                                                     ? null
-                                                                    : () {
+                                                                    : () async {
                                                                         onSelect(
                                                                           event,
                                                                         );
-                                                                        event.room.sendReaction(
-                                                                          event
-                                                                              .eventId,
+                                                                        await onSendReaction(
+                                                                          event,
                                                                           emoji,
+                                                                          sentReactions,
                                                                         );
                                                                       },
                                                               ),
@@ -790,95 +817,11 @@ class Message extends StatelessWidget {
                                                                 context,
                                                               ).customReaction,
                                                               onPressed: () async {
-                                                                final emoji = await showAdaptiveBottomSheet<String>(
-                                                                  context:
-                                                                      context,
-                                                                  builder: (context) => Scaffold(
-                                                                    appBar: AppBar(
-                                                                      title: Text(
-                                                                        L10n.of(
-                                                                          context,
-                                                                        ).customReaction,
-                                                                      ),
-                                                                      leading: CloseButton(
-                                                                        onPressed: () => Navigator.of(
-                                                                          context,
-                                                                        ).pop(null),
-                                                                      ),
-                                                                    ),
-                                                                    body: SizedBox(
-                                                                      height: double
-                                                                          .infinity,
-                                                                      child: EmojiPicker(
-                                                                        onEmojiSelected:
-                                                                            (
-                                                                              _,
-                                                                              emoji,
-                                                                            ) =>
-                                                                                Navigator.of(
-                                                                                  context,
-                                                                                ).pop(
-                                                                                  emoji.emoji,
-                                                                                ),
-                                                                        config: Config(
-                                                                          locale: Localizations.localeOf(
-                                                                            context,
-                                                                          ),
-                                                                          emojiViewConfig: const EmojiViewConfig(
-                                                                            backgroundColor:
-                                                                                Colors.transparent,
-                                                                          ),
-                                                                          bottomActionBarConfig: const BottomActionBarConfig(
-                                                                            enabled:
-                                                                                false,
-                                                                          ),
-                                                                          categoryViewConfig: CategoryViewConfig(
-                                                                            initCategory:
-                                                                                Category.SMILEYS,
-                                                                            backspaceColor:
-                                                                                theme.colorScheme.primary,
-                                                                            iconColor: theme.colorScheme.primary.withAlpha(
-                                                                              128,
-                                                                            ),
-                                                                            iconColorSelected:
-                                                                                theme.colorScheme.primary,
-                                                                            indicatorColor:
-                                                                                theme.colorScheme.primary,
-                                                                            backgroundColor:
-                                                                                theme.colorScheme.surface,
-                                                                          ),
-                                                                          skinToneConfig: SkinToneConfig(
-                                                                            dialogBackgroundColor: Color.lerp(
-                                                                              theme.colorScheme.surface,
-                                                                              theme.colorScheme.primaryContainer,
-                                                                              0.75,
-                                                                            )!,
-                                                                            indicatorColor:
-                                                                                theme.colorScheme.onSurface,
-                                                                          ),
-                                                                        ),
-                                                                      ),
-                                                                    ),
-                                                                  ),
-                                                                );
-                                                                if (emoji ==
-                                                                    null) {
-                                                                  return;
-                                                                }
-                                                                if (sentReactions
-                                                                    .contains(
-                                                                      emoji,
-                                                                    )) {
-                                                                  return;
-                                                                }
                                                                 onSelect(event);
-
-                                                                await event.room
-                                                                    .sendReaction(
-                                                                      event
-                                                                          .eventId,
-                                                                      emoji,
-                                                                    );
+                                                                await onSendCustomReaction(
+                                                                  event,
+                                                                  sentReactions,
+                                                                );
                                                               },
                                                             ),
                                                           ],

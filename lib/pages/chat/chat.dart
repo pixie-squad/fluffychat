@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -18,6 +19,7 @@ import 'package:scroll_to_index/scroll_to_index.dart';
 
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
+import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat/chat_view.dart';
 import 'package:fluffychat/pages/chat/event_info_dialog.dart';
@@ -40,6 +42,9 @@ import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
 import '../../utils/account_bundles.dart';
 import '../../utils/localized_exception_extension.dart';
+import 'events/custom_reaction_picker.dart';
+import 'events/message_context_menu.dart';
+import 'events/message_context_menu_logic.dart';
 import 'send_file_dialog.dart';
 import 'send_location_dialog.dart';
 
@@ -154,6 +159,7 @@ class ChatController extends State<ChatPageWithRoom>
       selectedEvents.single.saveFile(context);
 
   List<Event> selectedEvents = [];
+  static const String _reactionUsageStoreKey = 'chat.fluffy.reaction_usage.v1';
 
   final Set<String> unfolded = {};
 
@@ -173,6 +179,37 @@ class ChatController extends State<ChatPageWithRoom>
   String pendingText = '';
 
   bool showEmojiPicker = false;
+
+  Map<String, int> _readReactionUsage() {
+    final raw = AppSettings.store.getString(_reactionUsageStoreKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return {};
+      return decoded.map((key, value) {
+        final count = value is int ? value : int.tryParse('$value') ?? 0;
+        return MapEntry(key, count);
+      });
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _writeReactionUsage(Map<String, int> usage) =>
+      AppSettings.store.setString(_reactionUsageStoreKey, jsonEncode(usage));
+
+  Future<void> _incrementReactionUsage(String reactionKey) async {
+    final key = reactionKey.trim();
+    if (key.isEmpty) return;
+    final usage = _readReactionUsage();
+    usage[key] = (usage[key] ?? 0) + 1;
+    await _writeReactionUsage(usage);
+  }
+
+  List<String> get quickReactionOptions => rankQuickReactions(
+    _readReactionUsage(),
+    fallbackReactions: [...AppConfig.defaultReactions, '👌'],
+  );
 
   String? get threadLastEventId {
     final threadId = activeThreadId;
@@ -680,7 +717,12 @@ class ChatController extends State<ChatPageWithRoom>
       context: context,
       builder: (c) => SendFileDialog(
         files: [
-          XFile.fromData(image, name: 'clipboard-image.png', mimeType: 'image/png'),
+          XFile.fromData(
+            image,
+            name: 'clipboard-image.png',
+            path: 'clipboard-image.png',
+            mimeType: 'image/png',
+          ),
         ],
         room: room,
         outerContext: context,
@@ -802,35 +844,49 @@ class ChatController extends State<ChatPageWithRoom>
     );
   }
 
-  String _getSelectedEventString() {
-    var copyString = '';
-    if (selectedEvents.length == 1) {
-      return selectedEvents.first
+  String _getEventString(List<Event> events) {
+    if (events.isEmpty) return '';
+    if (events.length == 1) {
+      return events.first
           .getDisplayEvent(timeline!)
           .calcLocalizedBodyFallback(MatrixLocals(L10n.of(context)));
     }
-    for (final event in selectedEvents) {
-      if (copyString.isNotEmpty) copyString += '\n\n';
-      copyString += event
-          .getDisplayEvent(timeline!)
-          .calcLocalizedBodyFallback(
-            MatrixLocals(L10n.of(context)),
-            withSenderNamePrefix: true,
-          );
-    }
-    return copyString;
+    return events
+        .map(
+          (event) => event
+              .getDisplayEvent(timeline!)
+              .calcLocalizedBodyFallback(
+                MatrixLocals(L10n.of(context)),
+                withSenderNamePrefix: true,
+              ),
+        )
+        .join('\n\n');
   }
 
-  void copyEventsAction() {
-    Clipboard.setData(ClipboardData(text: _getSelectedEventString()));
+  void _copyEventsToClipboard(
+    List<Event> events, {
+    required bool clearSelection,
+  }) {
+    if (events.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: _getEventString(events)));
     setState(() {
       showEmojiPicker = false;
-      selectedEvents.clear();
+      if (clearSelection) {
+        selectedEvents.clear();
+      }
     });
   }
 
-  Future<void> reportEventAction() async {
-    final event = selectedEvents.single;
+  void copyEventsAction() =>
+      _copyEventsToClipboard(selectedEvents, clearSelection: true);
+
+  void copySingleEventAction(Event event) =>
+      _copyEventsToClipboard([event], clearSelection: false);
+
+  Future<void> _reportEventAction(
+    Event event, {
+    required bool clearSelection,
+  }) async {
     final score = await showModalActionPopup<int>(
       context: context,
       title: L10n.of(context).reportMessage,
@@ -866,11 +922,18 @@ class ChatController extends State<ChatPageWithRoom>
     if (result.error != null) return;
     setState(() {
       showEmojiPicker = false;
-      selectedEvents.clear();
+      if (clearSelection) {
+        selectedEvents.clear();
+      }
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(L10n.of(context).contentHasBeenReported)),
     );
+  }
+
+  Future<void> reportEventAction([Event? event]) async {
+    final target = event ?? selectedEvents.single;
+    await _reportEventAction(target, clearSelection: event == null);
   }
 
   Future<void> deleteErrorEventsAction() async {
@@ -892,8 +955,12 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
-  Future<void> redactEventsAction() async {
-    final reasonInput = selectedEvents.any((event) => event.status.isSent)
+  Future<void> _redactEvents(
+    List<Event> events, {
+    required bool clearSelection,
+  }) async {
+    if (events.isEmpty) return;
+    final reasonInput = events.any((event) => event.status.isSent)
         ? await showTextInputDialog(
             context: context,
             title: L10n.of(context).redactMessage,
@@ -912,15 +979,15 @@ class ChatController extends State<ChatPageWithRoom>
     await showFutureLoadingDialog(
       context: context,
       futureWithProgress: (onProgress) async {
-        final count = selectedEvents.length;
-        for (final (i, event) in selectedEvents.indexed) {
+        final count = events.length;
+        for (final (i, event) in events.indexed) {
           onProgress(i / count);
           if (event.status.isSent) {
             if (event.canRedact) {
               await event.redactEvent(reason: reason);
             } else {
               final client = currentRoomBundle.firstWhere(
-                (cl) => selectedEvents.first.senderId == cl!.userID,
+                (cl) => event.senderId == cl!.userID,
                 orElse: () => null,
               );
               if (client == null) {
@@ -940,9 +1007,17 @@ class ChatController extends State<ChatPageWithRoom>
     );
     setState(() {
       showEmojiPicker = false;
-      selectedEvents.clear();
+      if (clearSelection) {
+        selectedEvents.clear();
+      }
     });
   }
+
+  Future<void> redactEventsAction() async =>
+      _redactEvents(selectedEvents, clearSelection: true);
+
+  Future<void> redactSingleEventAction(Event event) async =>
+      _redactEvents([event], clearSelection: false);
 
   List<Client?> get currentRoomBundle {
     final clients = Matrix.of(context).currentBundle!;
@@ -950,17 +1025,26 @@ class ChatController extends State<ChatPageWithRoom>
     return clients;
   }
 
-  bool get canRedactSelectedEvents {
-    if (isArchived) return false;
+  bool _isOwnEvent(Event event) =>
+      currentRoomBundle.any((cl) => event.senderId == cl!.userID);
+
+  bool _canRedactEvent(Event event) {
+    if (isArchived || !event.status.isSent) return false;
+    if (event.canRedact) return true;
     final clients = Matrix.of(context).currentBundle;
-    for (final event in selectedEvents) {
-      if (!event.status.isSent) return false;
-      if (event.canRedact == false &&
-          !(clients!.any((cl) => event.senderId == cl!.userID))) {
-        return false;
-      }
+    return clients?.any((cl) => event.senderId == cl!.userID) ?? false;
+  }
+
+  bool _canEditEvent(Event event) {
+    if (isArchived || !event.status.isSent) {
+      return false;
     }
-    return true;
+    return _isOwnEvent(event);
+  }
+
+  bool get canRedactSelectedEvents {
+    if (selectedEvents.isEmpty) return false;
+    return selectedEvents.every(_canRedactEvent);
   }
 
   bool get canPinSelectedEvents {
@@ -975,23 +1059,20 @@ class ChatController extends State<ChatPageWithRoom>
   }
 
   bool get canEditSelectedEvents {
-    if (isArchived ||
-        selectedEvents.length != 1 ||
-        !selectedEvents.first.status.isSent) {
-      return false;
-    }
-    return currentRoomBundle.any(
-      (cl) => selectedEvents.first.senderId == cl!.userID,
-    );
+    if (selectedEvents.length != 1) return false;
+    return _canEditEvent(selectedEvents.first);
   }
 
-  Future<void> forwardEventsAction() async {
-    if (selectedEvents.isEmpty) return;
+  Future<void> _forwardEvents(
+    List<Event> events, {
+    required bool clearSelection,
+  }) async {
+    if (events.isEmpty) return;
     final timeline = this.timeline;
     if (timeline == null) return;
 
     final forwardEvents = List<Event>.from(
-      selectedEvents,
+      events,
     ).map((event) => event.getDisplayEvent(timeline)).toList();
 
     await showScaffoldDialog(
@@ -1003,8 +1084,16 @@ class ChatController extends State<ChatPageWithRoom>
       ),
     );
     if (!mounted) return;
-    setState(() => selectedEvents.clear());
+    if (clearSelection) {
+      setState(() => selectedEvents.clear());
+    }
   }
+
+  Future<void> forwardEventsAction() async =>
+      _forwardEvents(selectedEvents, clearSelection: true);
+
+  Future<void> forwardSingleEventAction(Event event) async =>
+      _forwardEvents([event], clearSelection: false);
 
   void sendAgainAction() {
     final event = selectedEvents.first;
@@ -1026,6 +1115,107 @@ class ChatController extends State<ChatPageWithRoom>
       selectedEvents.clear();
     });
     inputFocus.requestFocus();
+  }
+
+  Set<String> _sentReactionsForEvent(Event event) {
+    final timeline = this.timeline;
+    if (timeline == null) return {};
+    return event
+        .aggregatedEvents(timeline, RelationshipTypes.reaction)
+        .where(
+          (reactionEvent) =>
+              reactionEvent.senderId == reactionEvent.room.client.userID &&
+              reactionEvent.type == EventTypes.Reaction,
+        )
+        .map(
+          (reactionEvent) => reactionEvent.content
+              .tryGetMap<String, Object?>('m.relates_to')
+              ?.tryGet<String>('key'),
+        )
+        .whereType<String>()
+        .toSet();
+  }
+
+  Future<void> sendReactionAction(
+    Event event,
+    String reactionKey,
+    Set<String> sentReactions,
+  ) async {
+    final key = reactionKey.trim();
+    if (key.isEmpty || sentReactions.contains(key)) return;
+    await event.room.sendReaction(event.eventId, key);
+    await _incrementReactionUsage(key);
+  }
+
+  Future<void> sendCustomReactionAction(
+    Event event,
+    Set<String> sentReactions,
+  ) async {
+    final emoji = await showCustomReactionPicker(context);
+    if (emoji == null || emoji.isEmpty || sentReactions.contains(emoji)) return;
+    await sendReactionAction(event, emoji, sentReactions);
+  }
+
+  Future<void> openMessageContextMenu(
+    Event event,
+    Offset globalPosition,
+  ) async {
+    final availability = resolveMessageContextActionAvailability(
+      isSent: event.status.isSent,
+      isError: event.status.isError,
+      isRedacted: event.redacted,
+      isOwnEvent: _isOwnEvent(event),
+      isArchived: isArchived,
+      canRedact: _canRedactEvent(event),
+      roomCanSendDefaultMessages: room.canSendDefaultMessages,
+      hasActiveThread: activeThreadId != null,
+    );
+    final sentReactions = _sentReactionsForEvent(event);
+    final result = await showMessageContextMenu(
+      context: context,
+      globalPosition: globalPosition,
+      availability: availability,
+      quickReactions: quickReactionOptions,
+      sentReactions: sentReactions,
+    );
+
+    if (result == null || !mounted) return;
+
+    switch (result) {
+      case MessageContextMenuActionResult(:final action):
+        switch (action) {
+          case MessageContextAction.reply:
+            replyAction(replyTo: event);
+            return;
+          case MessageContextAction.copy:
+            copySingleEventAction(event);
+            return;
+          case MessageContextAction.forward:
+            await forwardSingleEventAction(event);
+            return;
+          case MessageContextAction.replyInThread:
+            enterThread(event.eventId);
+            return;
+          case MessageContextAction.select:
+            onSelectMessage(event);
+            return;
+          case MessageContextAction.edit:
+            editSingleEventAction(event);
+            return;
+          case MessageContextAction.redact:
+            await redactSingleEventAction(event);
+            return;
+          case MessageContextAction.report:
+            await reportEventAction(event);
+            return;
+        }
+      case MessageContextMenuQuickReactionResult(:final reactionKey):
+        await sendReactionAction(event, reactionKey, sentReactions);
+        return;
+      case MessageContextMenuCustomReactionResult():
+        await sendCustomReactionAction(event, sentReactions);
+        return;
+    }
   }
 
   Future<void> scrollToEventId(
@@ -1132,9 +1322,9 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
-  void editSelectedEventAction() {
+  void _editEventAction(Event event, {required bool clearSelection}) {
     final client = currentRoomBundle.firstWhere(
-      (cl) => selectedEvents.first.senderId == cl!.userID,
+      (cl) => event.senderId == cl!.userID,
       orElse: () => null,
     );
     if (client == null) {
@@ -1143,7 +1333,7 @@ class ChatController extends State<ChatPageWithRoom>
     setSendingClient(client);
     setState(() {
       pendingText = sendController.text;
-      editEvent = selectedEvents.first;
+      editEvent = event;
       sendController.text = editEvent!
           .getDisplayEvent(timeline!)
           .calcLocalizedBodyFallback(
@@ -1151,10 +1341,20 @@ class ChatController extends State<ChatPageWithRoom>
             withSenderNamePrefix: false,
             hideReply: true,
           );
-      selectedEvents.clear();
+      if (clearSelection) {
+        selectedEvents.clear();
+      }
     });
     inputFocus.requestFocus();
   }
+
+  void editSelectedEventAction() {
+    if (selectedEvents.length != 1) return;
+    _editEventAction(selectedEvents.first, clearSelection: true);
+  }
+
+  void editSingleEventAction(Event event) =>
+      _editEventAction(event, clearSelection: false);
 
   Future<void> goToNewRoomAction() async {
     final result = await showFutureLoadingDialog(

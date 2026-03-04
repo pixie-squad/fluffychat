@@ -30,6 +30,7 @@ class ChatEventList extends StatelessWidget {
     final theme = Theme.of(context);
 
     final colors = [theme.secondaryBubbleColor, theme.bubbleColor];
+    final quickReactions = controller.quickReactionOptions;
 
     final horizontalPadding = FluffyThemes.isColumnMode(context) ? 8.0 : 0.0;
 
@@ -53,8 +54,7 @@ class ChatEventList extends StatelessWidget {
     final albumAnchorIds = <String, String>{};
     final albumContinuationIds = <String>{};
     for (final event in events) {
-      final albumId =
-          event.content.tryGet<String>('r.trd.album_id');
+      final albumId = event.content.tryGet<String>('r.trd.album_id');
       if (albumId != null) {
         albumGroups.putIfAbsent(albumId, () => []);
         albumGroups[albumId]!.add(event);
@@ -168,11 +168,11 @@ class ChatEventList extends StatelessWidget {
                 !controller.expandedEventIds.contains(event.eventId);
 
             // Album grouping
-            final isAlbumContinuation =
-                albumContinuationIds.contains(event.eventId);
+            final isAlbumContinuation = albumContinuationIds.contains(
+              event.eventId,
+            );
             final albumId = albumAnchorIds[event.eventId];
-            final albumEvents =
-                albumId != null ? albumGroups[albumId] : null;
+            final albumEvents = albumId != null ? albumGroups[albumId] : null;
 
             return AutoScrollTag(
               key: ValueKey(event.eventId),
@@ -189,6 +189,9 @@ class ChatEventList extends StatelessWidget {
                 onInfoTab: controller.showEventInfo,
                 onMention: () => controller.sendController.text +=
                     '${event.senderFromMemoryOrFallback.mention} ',
+                onOpenContextMenu: controller.openMessageContextMenu,
+                onSendReaction: controller.sendReactionAction,
+                onSendCustomReaction: controller.sendCustomReactionAction,
                 highlightMarker:
                     controller.scrollToEventIdMarker == event.eventId,
                 onSelect: controller.onSelectMessage,
@@ -221,6 +224,7 @@ class ChatEventList extends StatelessWidget {
                     : null,
                 albumEvents: albumEvents,
                 isAlbumContinuation: isAlbumContinuation,
+                quickReactions: quickReactions,
               ),
             );
           },

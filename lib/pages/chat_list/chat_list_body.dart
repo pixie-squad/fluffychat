@@ -124,9 +124,7 @@ class ChatListViewBody extends StatelessWidget {
                       AppSettings.showPresences.value)
                     GestureDetector(
                       onLongPress: controller.dismissStatusList,
-                      child: StatusMessageList(
-                        onStatusEdit: controller.setStatus,
-                      ),
+                      child: const StatusMessageList(),
                     ),
                   if (client.rooms.isNotEmpty && !controller.isSearchMode)
                     SizedBox(

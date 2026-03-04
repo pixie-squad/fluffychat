@@ -38,7 +38,7 @@ extension MatrixFileExtension on MatrixFile {
 
     await SharePlus.instance.share(
       ShareParams(
-        files: [XFile.fromData(bytes, name: name, mimeType: mimeType)],
+        files: [XFile.fromData(bytes, name: name, path: name, mimeType: mimeType)],
         sharePositionOrigin: box == null
             ? null
             : box.localToGlobal(Offset.zero) & box.size,

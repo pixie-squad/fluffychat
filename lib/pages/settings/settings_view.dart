@@ -10,7 +10,6 @@ import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/matrix.dart';
-import '../../widgets/mxc_image_viewer.dart';
 import 'settings.dart';
 
 class SettingsView extends StatelessWidget {
@@ -46,74 +45,71 @@ class SettingsView extends StatelessWidget {
                     Matrix.of(context).client.userID ?? L10n.of(context).user;
                 final displayname =
                     profile?.displayName ?? mxid.localpart ?? mxid;
-                return Row(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(32.0),
-                      child: Stack(
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: profile == null
+                        ? null
+                        : () => controller.openProfileAction(profile),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 16,
+                      ),
+                      child: Row(
                         children: [
                           Avatar(
                             mxContent: avatar,
                             name: displayname,
-                            size: Avatar.defaultSize * 2.5,
-                            onTap: avatar != null
-                                ? () => showDialog(
-                                    context: context,
-                                    builder: (_) => MxcImageViewer(avatar),
-                                  )
-                                : null,
+                            size: Avatar.defaultSize * 1.8,
                           ),
-                          if (profile != null)
-                            Positioned(
-                              bottom: 0,
-                              right: 0,
-                              child: FloatingActionButton.small(
-                                elevation: 2,
-                                onPressed: controller.setAvatarAction,
-                                heroTag: null,
-                                child: const Icon(Icons.camera_alt_outlined),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    Expanded(
-                      child: Column(
-                        mainAxisAlignment: .center,
-                        crossAxisAlignment: .start,
-                        children: [
-                          TextButton.icon(
-                            onPressed: controller.setDisplaynameAction,
-                            icon: const Icon(Icons.edit_outlined, size: 16),
-                            style: TextButton.styleFrom(
-                              foregroundColor: theme.colorScheme.onSurface,
-                              iconColor: theme.colorScheme.onSurface,
-                            ),
-                            label: Text(
-                              displayname,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 18),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  displayname,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 18),
+                                ),
+                                const SizedBox(height: 4),
+                                TextButton.icon(
+                                  onPressed: () =>
+                                      FluffyShare.share(mxid, context),
+                                  icon: const Icon(
+                                    Icons.copy_outlined,
+                                    size: 14,
+                                  ),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor:
+                                        theme.colorScheme.secondary,
+                                    iconColor: theme.colorScheme.secondary,
+                                    visualDensity: VisualDensity.compact,
+                                    padding: EdgeInsets.zero,
+                                    minimumSize: const Size(0, 0),
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  label: Text(
+                                    mxid,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          TextButton.icon(
-                            onPressed: () => FluffyShare.share(mxid, context),
-                            icon: const Icon(Icons.copy_outlined, size: 14),
-                            style: TextButton.styleFrom(
-                              foregroundColor: theme.colorScheme.secondary,
-                              iconColor: theme.colorScheme.secondary,
-                            ),
-                            label: Text(
-                              mxid,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              //    style: const TextStyle(fontSize: 12),
-                            ),
+                          Icon(
+                            Icons.chevron_right,
+                            color: theme.colorScheme.onSurfaceVariant,
                           ),
                         ],
                       ),
                     ),
-                  ],
+                  ),
                 );
               },
             ),

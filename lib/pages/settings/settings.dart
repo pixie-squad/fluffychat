@@ -2,19 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'package:collection/collection.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:go_router/go_router.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:matrix/encryption.dart';
 import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/l10n/l10n.dart';
-import 'package:fluffychat/utils/file_selector.dart';
-import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
+import 'package:fluffychat/widgets/adaptive_dialogs/user_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import '../../widgets/matrix.dart';
 import 'settings_view.dart';
@@ -34,32 +28,6 @@ class SettingsController extends State<Settings> {
     profileUpdated = true;
     profileFuture = null;
   });
-
-  Future<void> setDisplaynameAction() async {
-    final profile = await profileFuture;
-    final input = await showTextInputDialog(
-      useRootNavigator: false,
-      context: context,
-      title: L10n.of(context).editDisplayname,
-      okLabel: L10n.of(context).ok,
-      cancelLabel: L10n.of(context).cancel,
-      initialText:
-          profile?.displayName ?? Matrix.of(context).client.userID!.localpart,
-    );
-    if (input == null) return;
-    final matrix = Matrix.of(context);
-    final success = await showFutureLoadingDialog(
-      context: context,
-      future: () => matrix.client.setProfileField(
-        matrix.client.userID!,
-        'displayname',
-        {'displayname': input},
-      ),
-    );
-    if (success.error == null) {
-      updateProfile();
-    }
-  }
 
   Future<void> logoutAction() async {
     if (await showOkCancelAlertDialog(
@@ -81,75 +49,17 @@ class SettingsController extends State<Settings> {
     );
   }
 
-  Future<void> setAvatarAction() async {
-    final profile = await profileFuture;
-    final actions = [
-      if (PlatformInfos.isMobile)
-        AdaptiveModalAction(
-          value: AvatarAction.camera,
-          label: L10n.of(context).openCamera,
-          isDefaultAction: true,
-          icon: const Icon(Icons.camera_alt_outlined),
-        ),
-      AdaptiveModalAction(
-        value: AvatarAction.file,
-        label: L10n.of(context).openGallery,
-        icon: const Icon(Icons.photo_outlined),
-      ),
-      if (profile?.avatarUrl != null)
-        AdaptiveModalAction(
-          value: AvatarAction.remove,
-          label: L10n.of(context).removeYourAvatar,
-          isDestructive: true,
-          icon: const Icon(Icons.delete_outlined),
-        ),
-    ];
-    final action = actions.length == 1
-        ? actions.single.value
-        : await showModalActionPopup<AvatarAction>(
-            context: context,
-            title: L10n.of(context).changeYourAvatar,
-            cancelLabel: L10n.of(context).cancel,
-            actions: actions,
-          );
-    if (action == null) return;
-    final matrix = Matrix.of(context);
-    if (action == AvatarAction.remove) {
-      final success = await showFutureLoadingDialog(
-        context: context,
-        future: () => matrix.client.setAvatar(null),
-      );
-      if (success.error == null) {
-        updateProfile();
-      }
-      return;
-    }
-    MatrixFile file;
-    if (PlatformInfos.isMobile) {
-      final result = await ImagePicker().pickImage(
-        source: action == AvatarAction.camera
-            ? ImageSource.camera
-            : ImageSource.gallery,
-        imageQuality: 50,
-      );
-      if (result == null) return;
-      file = MatrixFile(bytes: await result.readAsBytes(), name: result.path);
-    } else {
-      final result = await selectFiles(context, type: FileType.image);
-      final pickedFile = result.firstOrNull;
-      if (pickedFile == null) return;
-      file = MatrixFile(
-        bytes: await pickedFile.readAsBytes(),
-        name: pickedFile.name,
-      );
-    }
-    final success = await showFutureLoadingDialog(
-      context: context,
-      future: () => matrix.client.setAvatar(file),
-    );
-    if (success.error == null) {
-      updateProfile();
-    }
+  Future<void> openProfileAction([Profile? profile]) async {
+    final fallbackProfileFuture =
+        profileFuture ??
+        Matrix.of(
+          context,
+        ).client.getProfileFromUserId(Matrix.of(context).client.userID!);
+    final currentProfile = profile ?? await fallbackProfileFuture;
+    if (!mounted) return;
+    await UserDialog.show(context: context, profile: currentProfile);
+    if (!mounted) return;
+    updateProfile();
   }
 
   @override
@@ -197,5 +107,3 @@ class SettingsController extends State<Settings> {
     return SettingsView(this);
   }
 }
-
-enum AvatarAction { camera, file, remove }

@@ -11,18 +11,12 @@ import 'package:fluffychat/widgets/matrix.dart';
 import '../../widgets/adaptive_dialogs/user_dialog.dart';
 
 class StatusMessageList extends StatelessWidget {
-  final void Function() onStatusEdit;
-
-  const StatusMessageList({required this.onStatusEdit, super.key});
+  const StatusMessageList({super.key});
 
   static const double height = 116;
 
   void _onStatusTab(BuildContext context, Profile profile) {
-    final client = Matrix.of(context).client;
-    if (profile.userId == client.userID) return onStatusEdit();
-
     UserDialog.show(context: context, profile: profile);
-    return;
   }
 
   @override
