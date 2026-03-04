@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -15,6 +17,21 @@ import '../../widgets/matrix.dart';
 import 'command_hints.dart';
 
 class InputBar extends StatelessWidget {
+  // Pre-compiled regexes for getSuggestions (avoid recompilation per keystroke)
+  static final _commandRegex = RegExp(r'^/(\w*)$');
+  static final _emojiRegex = RegExp(
+    r'(?:\s|^):(?:([\p{L}\p{N}_-]+)~)?([\p{L}\p{N}_-]+)$',
+    unicode: true,
+  );
+  static final _userMentionRegex = RegExp(r'(?:\s|^)@([-\w]+)$');
+  static final _roomMentionRegex = RegExp(r'(?:\s|^)#([-\w]+)$');
+
+  // Pre-compiled regexes for insertSuggestion
+  static final _insertCommandRegex = RegExp(r'^(/\w*)$');
+  static final _insertEmoteRegex = RegExp(r'(\s|^)(:(?:[-\w]+~)?[-\w]+)$');
+  static final _insertUserRegex = RegExp(r'(\s|^)(@[-\w]+)$');
+  static final _insertRoomRegex = RegExp(r'(\s|^)(#[-\w]+)$');
+
   final Room room;
   final int? minLines;
   final int? maxLines;
@@ -48,16 +65,42 @@ class InputBar extends StatelessWidget {
     super.key,
   });
 
-  List<Map<String, String?>> getSuggestions(TextEditingValue text) {
+  FutureOr<List<Map<String, String?>>> getSuggestions(
+    TextEditingValue text,
+  ) async {
     if (text.selection.baseOffset != text.selection.extentOffset ||
         text.selection.baseOffset < 0) {
       return []; // no entries if there is selected text
     }
     final searchText = text.text.substring(0, text.selection.baseOffset);
+    if (searchText.isEmpty) return [];
+
+    // Fast path: skip all regex work when no trigger character is present.
+    // This is the common case for normal typing in any language.
+    var lastWsIndex = -1;
+    for (var i = searchText.length - 1; i >= 0; i--) {
+      final c = searchText.codeUnitAt(i);
+      if (c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D) {
+        lastWsIndex = i;
+        break;
+      }
+    }
+    final lastWord =
+        lastWsIndex == -1 ? searchText : searchText.substring(lastWsIndex + 1);
+    final hasTrigger = lastWord.startsWith(':') ||
+        lastWord.startsWith('@') ||
+        lastWord.startsWith('#') ||
+        (searchText.startsWith('/') && lastWsIndex == -1);
+    if (!hasTrigger) return [];
+
+    // Debounce: RawAutocomplete discards stale results via call-ID,
+    // so rapid keystrokes will only apply the latest result.
+    await Future.delayed(const Duration(milliseconds: 50));
+
     final ret = <Map<String, String?>>[];
     const maxResults = 30;
 
-    final commandMatch = RegExp(r'^/(\w*)$').firstMatch(searchText);
+    final commandMatch = _commandRegex.firstMatch(searchText);
     if (commandMatch != null) {
       final commandSearch = commandMatch[1]!.toLowerCase();
       for (final command in room.client.commands.keys) {
@@ -68,10 +111,7 @@ class InputBar extends StatelessWidget {
         if (ret.length > maxResults) return ret;
       }
     }
-    final emojiMatch = RegExp(
-      r'(?:\s|^):(?:([\p{L}\p{N}_-]+)~)?([\p{L}\p{N}_-]+)$',
-      unicode: true,
-    ).firstMatch(searchText);
+    final emojiMatch = _emojiRegex.firstMatch(searchText);
     if (emojiMatch != null) {
       final packSearch = emojiMatch[1];
       final emoteSearch = emojiMatch[2]!.toLowerCase();
@@ -118,39 +158,47 @@ class InputBar extends StatelessWidget {
       }
 
       // aside of emote packs, also propose normal (tm) unicode emojis
-      final matchingUnicodeEmojis = suggestionEmojis
-          .where((emoji) => emoji.name.toLowerCase().contains(emoteSearch))
-          .toList();
-
-      // sort by the index of the search term in the name in order to have
-      // best matches first
-      // (thanks for the hint by github.com/nextcloud/circles devs)
-      matchingUnicodeEmojis.sort((a, b) {
-        final indexA = a.name.indexOf(emoteSearch);
-        final indexB = b.name.indexOf(emoteSearch);
-        if (indexA == -1 || indexB == -1) {
-          if (indexA == indexB) return 0;
-          if (indexA == -1) {
-            return 1;
-          } else {
-            return 0;
+      // require at least 2 chars to avoid scanning all ~1600 emojis
+      final remainingSlots = maxResults - ret.length;
+      if (emoteSearch.length >= 2 && remainingSlots > 0) {
+        final matchingUnicodeEmojis = <Emoji>[];
+        for (final emoji in suggestionEmojis) {
+          if (emoji.name.toLowerCase().contains(emoteSearch)) {
+            matchingUnicodeEmojis.add(emoji);
           }
+          if (matchingUnicodeEmojis.length >= remainingSlots * 3) break;
         }
-        return indexA.compareTo(indexB);
-      });
-      for (final emoji in matchingUnicodeEmojis) {
-        ret.add({
-          'type': 'emoji',
-          'emoji': emoji.emoji,
-          'label': emoji.name,
-          'current_word': ':$emoteSearch',
+
+        // sort by the index of the search term in the name in order to have
+        // best matches first
+        // (thanks for the hint by github.com/nextcloud/circles devs)
+        matchingUnicodeEmojis.sort((a, b) {
+          final indexA = a.name.indexOf(emoteSearch);
+          final indexB = b.name.indexOf(emoteSearch);
+          if (indexA == -1 || indexB == -1) {
+            if (indexA == indexB) return 0;
+            if (indexA == -1) {
+              return 1;
+            } else {
+              return 0;
+            }
+          }
+          return indexA.compareTo(indexB);
         });
-        if (ret.length > maxResults) {
-          break;
+        for (final emoji in matchingUnicodeEmojis) {
+          ret.add({
+            'type': 'emoji',
+            'emoji': emoji.emoji,
+            'label': emoji.name,
+            'current_word': ':$emoteSearch',
+          });
+          if (ret.length > maxResults) {
+            break;
+          }
         }
       }
     }
-    final userMatch = RegExp(r'(?:\s|^)@([-\w]+)$').firstMatch(searchText);
+    final userMatch = _userMentionRegex.firstMatch(searchText);
     if (userMatch != null) {
       final userSearch = userMatch[1]!.toLowerCase();
       for (final user in room.getParticipants()) {
@@ -173,7 +221,7 @@ class InputBar extends StatelessWidget {
         }
       }
     }
-    final roomMatch = RegExp(r'(?:\s|^)#([-\w]+)$').firstMatch(searchText);
+    final roomMatch = _roomMentionRegex.firstMatch(searchText);
     if (roomMatch != null) {
       final roomSearch = roomMatch[1]!.toLowerCase();
       for (final r in room.client.rooms) {
@@ -327,7 +375,7 @@ class InputBar extends StatelessWidget {
     if (suggestion['type'] == 'command') {
       insertText = '${suggestion['name']!} ';
       startText = replaceText.replaceAllMapped(
-        RegExp(r'^(/\w*)$'),
+        _insertCommandRegex,
         (Match m) => '/$insertText',
       );
     }
@@ -359,21 +407,21 @@ class InputBar extends StatelessWidget {
       }
       insertText = ':${isUnique ? '' : '${insertPack!}~'}$insertEmote: ';
       startText = replaceText.replaceAllMapped(
-        RegExp(r'(\s|^)(:(?:[-\w]+~)?[-\w]+)$'),
+        _insertEmoteRegex,
         (Match m) => '${m[1]}$insertText',
       );
     }
     if (suggestion['type'] == 'user') {
       insertText = '${suggestion['mention']!} ';
       startText = replaceText.replaceAllMapped(
-        RegExp(r'(\s|^)(@[-\w]+)$'),
+        _insertUserRegex,
         (Match m) => '${m[1]}$insertText',
       );
     }
     if (suggestion['type'] == 'room') {
       insertText = '${suggestion['mxid']!} ';
       startText = replaceText.replaceAllMapped(
-        RegExp(r'(\s|^)(#[-\w]+)$'),
+        _insertRoomRegex,
         (Match m) => '${m[1]}$insertText',
       );
     }

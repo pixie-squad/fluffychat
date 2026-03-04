@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:animations/animations.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:emoji_picker_flutter/locales/default_emoji_set_locale.dart';
 import 'package:matrix/matrix.dart';
 
@@ -16,6 +17,23 @@ import 'package:fluffychat/widgets/matrix.dart';
 import '../../config/themes.dart';
 import 'chat.dart';
 import 'input_bar.dart';
+
+// Cached emoji suggestion list to avoid reconstructing ~1600 items on every build
+List<Emoji>? _cachedSuggestionEmojis;
+String? _cachedSuggestionLocale;
+
+List<Emoji> _getSuggestionEmojis(BuildContext context) {
+  final localeCode = AppSettings.emojiSuggestionLocale.value.isNotEmpty
+      ? AppSettings.emojiSuggestionLocale.value
+      : Localizations.localeOf(context).languageCode;
+
+  if (_cachedSuggestionLocale != localeCode || _cachedSuggestionEmojis == null) {
+    _cachedSuggestionEmojis = getDefaultEmojiLocale(Locale(localeCode))
+        .fold<List<Emoji>>([], (emojis, category) => emojis..addAll(category.emoji));
+    _cachedSuggestionLocale = localeCode;
+  }
+  return _cachedSuggestionEmojis!;
+}
 
 class ChatInputRow extends StatelessWidget {
   final ChatController controller;
@@ -340,18 +358,7 @@ class ChatInputRow extends StatelessWidget {
                           filled: false,
                         ),
                         onChanged: controller.onInputBarChanged,
-                        suggestionEmojis:
-                            getDefaultEmojiLocale(
-                              AppSettings.emojiSuggestionLocale.value.isNotEmpty
-                                  ? Locale(
-                                      AppSettings.emojiSuggestionLocale.value,
-                                    )
-                                  : Localizations.localeOf(context),
-                            ).fold(
-                              [],
-                              (emojis, category) =>
-                                  emojis..addAll(category.emoji),
-                            ),
+                        suggestionEmojis: _getSuggestionEmojis(context),
                       ),
                     ),
                   ),
