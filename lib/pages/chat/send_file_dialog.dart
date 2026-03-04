@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
@@ -37,11 +39,31 @@ class SendFileDialog extends StatefulWidget {
 
 class SendFileDialogState extends State<SendFileDialog> {
   bool compress = true;
+  bool groupAsAlbum = true;
+
+  static const int maxAlbumSize = 10;
 
   /// Images smaller than 20kb don't need compression.
   static const int minSizeToCompress = 20 * 1000;
 
   final TextEditingController _labelTextController = TextEditingController();
+
+  static String _generateAlbumId() {
+    final random = Random();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final suffix = random.nextInt(1 << 32).toRadixString(36);
+    return '$timestamp-$suffix';
+  }
+
+  bool get _canGroupAsAlbum {
+    if (widget.files.length <= 1) return false;
+    final allMedia = widget.files.every((file) {
+      final mimeType = file.mimeType ?? lookupMimeType(file.name);
+      return mimeType != null &&
+          (mimeType.startsWith('image') || mimeType.startsWith('video'));
+    });
+    return allMedia;
+  }
 
   Future<void> _send() async {
     final scaffoldMessenger = ScaffoldMessenger.of(widget.outerContext);
@@ -56,7 +78,18 @@ class SendFileDialogState extends State<SendFileDialog> {
       final clientConfig = await widget.room.client.getConfig();
       final maxUploadSize = clientConfig.mUploadSize ?? 100 * 1000 * 1000;
 
-      for (final xfile in widget.files) {
+      // Generate album IDs for chunks of up to maxAlbumSize files
+      final useAlbum = _canGroupAsAlbum && groupAsAlbum;
+      final albumIds = <int, String>{};
+      if (useAlbum) {
+        for (var i = 0; i < widget.files.length; i++) {
+          final chunkIndex = i ~/ maxAlbumSize;
+          albumIds.putIfAbsent(chunkIndex, () => _generateAlbumId());
+        }
+      }
+
+      for (var fileIndex = 0; fileIndex < widget.files.length; fileIndex++) {
+        final xfile = widget.files[fileIndex];
         final MatrixFile file;
         MatrixImageFile? thumbnail;
         final length = await xfile.length();
@@ -97,7 +130,7 @@ class SendFileDialogState extends State<SendFileDialog> {
         if (widget.files.length > 1) {
           scaffoldMessenger.showLoadingSnackBar(
             l10n.sendingAttachmentCountOfCount(
-              widget.files.indexOf(xfile) + 1,
+              fileIndex + 1,
               widget.files.length,
             ),
           );
@@ -105,12 +138,21 @@ class SendFileDialogState extends State<SendFileDialog> {
 
         final label = _labelTextController.text.trim();
 
+        final extraContent = <String, Object?>{};
+        if (label.isNotEmpty) {
+          extraContent['body'] = label;
+        }
+        if (useAlbum) {
+          final chunkIndex = fileIndex ~/ maxAlbumSize;
+          extraContent['r.trd.album_id'] = albumIds[chunkIndex];
+        }
+
         try {
           await widget.room.sendFileEvent(
             file,
             thumbnail: thumbnail,
             shrinkImageMaxDimension: compress ? 1600 : null,
-            extraContent: label.isEmpty ? null : {'body': label},
+            extraContent: extraContent.isEmpty ? null : extraContent,
             threadRootEventId: widget.threadRootEventId,
             threadLastEventId: widget.threadLastEventId,
           );
@@ -138,7 +180,9 @@ class SendFileDialogState extends State<SendFileDialog> {
             file,
             thumbnail: thumbnail,
             shrinkImageMaxDimension: compress ? 1600 : null,
-            extraContent: label.isEmpty ? null : {'body': label},
+            extraContent: extraContent.isEmpty ? null : extraContent,
+            threadRootEventId: widget.threadRootEventId,
+            threadLastEventId: widget.threadLastEventId,
           );
         }
       }
@@ -401,6 +445,35 @@ class SendFileDialogState extends State<SendFileDialog> {
                           ),
                         ),
                       ],
+                    ),
+                  if (_canGroupAsAlbum)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          if ({
+                            TargetPlatform.iOS,
+                            TargetPlatform.macOS,
+                          }.contains(theme.platform))
+                            CupertinoSwitch(
+                              value: groupAsAlbum,
+                              onChanged: (v) =>
+                                  setState(() => groupAsAlbum = v),
+                            )
+                          else
+                            Switch.adaptive(
+                              value: groupAsAlbum,
+                              onChanged: (v) =>
+                                  setState(() => groupAsAlbum = v),
+                            ),
+                          const SizedBox(width: 16),
+                          Text(
+                            L10n.of(context).groupAsAlbum,
+                            style: theme.textTheme.titleMedium,
+                          ),
+                        ],
+                      ),
                     ),
                 ],
               ),

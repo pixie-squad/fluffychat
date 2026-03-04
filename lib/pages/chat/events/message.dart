@@ -21,6 +21,7 @@ import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/member_actions_popup_menu_button.dart';
 import 'package:fluffychat/widgets/profile_emoji_status_icon.dart';
 import '../../../config/app_config.dart';
+import 'media_album.dart';
 import 'message_content.dart';
 import 'message_reactions.dart';
 import 'reply_content.dart';
@@ -51,6 +52,8 @@ class Message extends StatelessWidget {
   final void Function()? onExpand;
   final bool isCollapsed;
   final Set<String> bigEmojis;
+  final List<Event>? albumEvents;
+  final bool isAlbumContinuation;
 
   const Message(
     this.event, {
@@ -77,11 +80,15 @@ class Message extends StatelessWidget {
     this.onExpand,
     required this.enterThread,
     this.isCollapsed = false,
+    this.albumEvents,
+    this.isAlbumContinuation = false,
     super.key,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (isAlbumContinuation) return const SizedBox.shrink();
+
     final theme = Theme.of(context);
 
     if (!{
@@ -158,7 +165,7 @@ class Message extends StatelessWidget {
           ? hardCorner
           : roundedCorner,
     );
-    final noBubble =
+    final noBubble = albumEvents != null ||
         ({
           MessageTypes.Video,
           MessageTypes.Image,
@@ -619,17 +626,31 @@ class Message extends StatelessWidget {
                                                                   );
                                                                 },
                                                           ),
-                                                        MessageContent(
-                                                          displayEvent,
-                                                          textColor: textColor,
-                                                          linkColor: linkColor,
-                                                          onInfoTab: onInfoTab,
-                                                          borderRadius:
-                                                              borderRadius,
-                                                          timeline: timeline,
-                                                          selected: selected,
-                                                          bigEmojis: bigEmojis,
-                                                        ),
+                                                        if (albumEvents !=
+                                                            null)
+                                                          MediaAlbum(
+                                                            events:
+                                                                albumEvents!,
+                                                            timeline: timeline,
+                                                            borderRadius:
+                                                                borderRadius,
+                                                          )
+                                                        else
+                                                          MessageContent(
+                                                            displayEvent,
+                                                            textColor:
+                                                                textColor,
+                                                            linkColor:
+                                                                linkColor,
+                                                            onInfoTab:
+                                                                onInfoTab,
+                                                            borderRadius:
+                                                                borderRadius,
+                                                            timeline: timeline,
+                                                            selected: selected,
+                                                            bigEmojis:
+                                                                bigEmojis,
+                                                          ),
                                                         if (event
                                                             .hasAggregatedEvents(
                                                               timeline,

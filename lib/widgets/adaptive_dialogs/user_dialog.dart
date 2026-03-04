@@ -51,21 +51,9 @@ class UserDialog extends StatefulWidget {
 }
 
 class _UserDialogState extends State<UserDialog> {
-  static const List<Color> _backgroundPresets = [
-    Color(0xFF8A8246),
-    Color(0xFF866D35),
-    Color(0xFF6E7A5E),
-    Color(0xFF4E5F72),
-    Color(0xFF6E5A78),
-    Color(0xFF7F4E4E),
-    Color(0xFF474747),
-    Color(0xFF2E2E2E),
-  ];
-
   ProfileCardFields _profileFields = const ProfileCardFields();
   bool _fieldsLoading = false;
   bool _copiedMxid = false;
-  List<Color>? _displayNameGradientColors;
   ProfileBannerStyle _bannerStyle = ProfileBannerStyle.fallback;
   int _bannerStyleRequestId = 0;
 
@@ -127,17 +115,17 @@ class _UserDialogState extends State<UserDialog> {
     }
   }
 
-  String? _presenceActivityText(CachedPresence? presence) {
-    final lastActiveTimestamp = presence?.lastActiveTimestamp;
-    if (presence?.currentlyActive == true) {
-      return L10n.of(context).currentlyActive;
+  String _presenceDotTooltipText(CachedPresence presence) {
+    if (presence.currentlyActive == true || presence.presence.isOnline) {
+      return L10n.of(context).online;
     }
+    final lastActiveTimestamp = presence.lastActiveTimestamp;
     if (lastActiveTimestamp != null) {
       return L10n.of(
         context,
       ).lastActiveAgo(lastActiveTimestamp.localizedTimeShort(context));
     }
-    return null;
+    return L10n.of(context).offline;
   }
 
   String? _statusText(CachedPresence? presence) {
@@ -146,164 +134,23 @@ class _UserDialogState extends State<UserDialog> {
     return statusMsg;
   }
 
-  bool _sameColorList(List<Color>? first, List<Color>? second) {
-    if (identical(first, second)) return true;
-    if (first == null || second == null) return false;
-    if (first.length != second.length) return false;
-    for (var i = 0; i < first.length; i++) {
-      if (first[i].toARGB32() != second[i].toARGB32()) return false;
-    }
-    return true;
-  }
+  Color _resolveMonochromeContrastForeground(
+    Color background, {
+    double targetContrast = 4.5,
+  }) => _resolveReadableForeground(
+    background: background,
+    candidates: const [Colors.black, Colors.white],
+    targetContrast: targetContrast,
+  );
 
-  void _onDisplayNameGradientColorsChanged(List<Color>? colors) {
-    final next = colors == null ? null : List<Color>.from(colors);
-    if (_sameColorList(_displayNameGradientColors, next)) return;
-    if (!mounted) return;
-    setState(() => _displayNameGradientColors = next);
-  }
-
-  _NamePillStyle _resolveNamePillStyle({
-    required List<Color> backgroundSamples,
-    required List<Color> textColors,
-  }) {
-    final safeBackgroundSamples = backgroundSamples.isEmpty
-        ? [Theme.of(context).colorScheme.surface]
-        : backgroundSamples;
-    final safeTextColors = textColors.isEmpty ? [Colors.white] : textColors;
-
-    const targetContrast = 3.8;
-    const minOverlayAlpha = 72;
-    const maxOverlayAlpha = 236;
-    const alphaStep = 4;
-
-    final darkCandidate = _findOverlayCandidate(
-      overlayColor: Colors.black,
-      backgroundSamples: safeBackgroundSamples,
-      textColors: safeTextColors,
-      targetContrast: targetContrast,
-      minAlpha: minOverlayAlpha,
-      maxAlpha: maxOverlayAlpha,
-      alphaStep: alphaStep,
-    );
-    final lightCandidate = _findOverlayCandidate(
-      overlayColor: Colors.white,
-      backgroundSamples: safeBackgroundSamples,
-      textColors: safeTextColors,
-      targetContrast: targetContrast,
-      minAlpha: minOverlayAlpha,
-      maxAlpha: maxOverlayAlpha,
-      alphaStep: alphaStep,
-    );
-    final selected = _pickOverlayCandidate(
-      darkCandidate: darkCandidate,
-      lightCandidate: lightCandidate,
-      targetContrast: targetContrast,
-    );
-
-    final representativeBackground = _averageColor(safeBackgroundSamples);
-    final background = Color.alphaBlend(
-      selected.overlayColor.withAlpha(selected.alpha),
-      representativeBackground,
-    );
-    final fallbackTextColor =
-        ThemeData.estimateBrightnessForColor(background) == Brightness.dark
-        ? Colors.white
-        : Colors.black;
-    final border = Color.alphaBlend(
-      fallbackTextColor.withAlpha(128),
-      background,
-    );
-
+  _NamePillStyle _resolveNamePillStyle() {
+    final colorScheme = Theme.of(context).colorScheme;
+    final background = colorScheme.surfaceContainerHighest;
     return _NamePillStyle(
       background: background,
-      border: border,
-      fallbackTextColor: fallbackTextColor,
+      border: colorScheme.outlineVariant,
+      fallbackTextColor: _resolveMonochromeContrastForeground(background),
     );
-  }
-
-  _NameOverlayCandidate _findOverlayCandidate({
-    required Color overlayColor,
-    required List<Color> backgroundSamples,
-    required List<Color> textColors,
-    required double targetContrast,
-    required int minAlpha,
-    required int maxAlpha,
-    required int alphaStep,
-  }) {
-    var best = _NameOverlayCandidate(
-      overlayColor: overlayColor,
-      alpha: minAlpha,
-      minContrast: 0,
-    );
-    for (var alpha = minAlpha; alpha <= maxAlpha; alpha += alphaStep) {
-      final contrast = _minimumContrastForOverlay(
-        overlayColor: overlayColor,
-        alpha: alpha,
-        backgroundSamples: backgroundSamples,
-        textColors: textColors,
-      );
-      if (contrast > best.minContrast) {
-        best = _NameOverlayCandidate(
-          overlayColor: overlayColor,
-          alpha: alpha,
-          minContrast: contrast,
-        );
-      }
-      if (contrast >= targetContrast) {
-        return _NameOverlayCandidate(
-          overlayColor: overlayColor,
-          alpha: alpha,
-          minContrast: contrast,
-        );
-      }
-    }
-    return best;
-  }
-
-  _NameOverlayCandidate _pickOverlayCandidate({
-    required _NameOverlayCandidate darkCandidate,
-    required _NameOverlayCandidate lightCandidate,
-    required double targetContrast,
-  }) {
-    final darkPasses = darkCandidate.minContrast >= targetContrast;
-    final lightPasses = lightCandidate.minContrast >= targetContrast;
-
-    if (darkPasses && lightPasses) {
-      if (darkCandidate.alpha != lightCandidate.alpha) {
-        return darkCandidate.alpha < lightCandidate.alpha
-            ? darkCandidate
-            : lightCandidate;
-      }
-      return darkCandidate.minContrast >= lightCandidate.minContrast
-          ? darkCandidate
-          : lightCandidate;
-    }
-    if (darkPasses) return darkCandidate;
-    if (lightPasses) return lightCandidate;
-    return darkCandidate.minContrast >= lightCandidate.minContrast
-        ? darkCandidate
-        : lightCandidate;
-  }
-
-  double _minimumContrastForOverlay({
-    required Color overlayColor,
-    required int alpha,
-    required List<Color> backgroundSamples,
-    required List<Color> textColors,
-  }) {
-    var minContrast = double.infinity;
-    for (final background in backgroundSamples) {
-      final containerColor = Color.alphaBlend(
-        overlayColor.withAlpha(alpha),
-        background,
-      );
-      for (final textColor in textColors) {
-        final contrast = _contrastRatio(textColor, containerColor);
-        if (contrast < minContrast) minContrast = contrast;
-      }
-    }
-    return minContrast;
   }
 
   double _contrastRatio(Color first, Color second) {
@@ -338,26 +185,13 @@ class _UserDialogState extends State<UserDialog> {
     return bestColor;
   }
 
-  Color _averageColor(List<Color> colors) {
-    var alphaTotal = 0;
-    var redTotal = 0;
-    var greenTotal = 0;
-    var blueTotal = 0;
-
-    for (final color in colors) {
-      final argb = color.toARGB32();
-      alphaTotal += (argb >> 24) & 0xFF;
-      redTotal += (argb >> 16) & 0xFF;
-      greenTotal += (argb >> 8) & 0xFF;
-      blueTotal += argb & 0xFF;
-    }
-
-    final count = colors.length;
-    return Color.fromARGB(
-      alphaTotal ~/ count,
-      redTotal ~/ count,
-      greenTotal ~/ count,
-      blueTotal ~/ count,
+  _ControlSurfaceStyle _resolveControlSurfaceStyle() {
+    final colorScheme = Theme.of(context).colorScheme;
+    final background = colorScheme.surfaceContainerHigh;
+    return _ControlSurfaceStyle(
+      foreground: _resolveMonochromeContrastForeground(background),
+      background: background,
+      border: colorScheme.outlineVariant,
     );
   }
 
@@ -535,38 +369,47 @@ class _UserDialogState extends State<UserDialog> {
     }
   }
 
-  Future<void> _showBackgroundPicker() async {
+  Future<void> _showBackgroundAppearanceChooser() async {
     if (!_isSelf) return;
-    if (_profileFields.bannerMxc != null) return;
 
-    final choice = await showAdaptiveDialog<_BackgroundColorChoice>(
+    final action = await showAdaptiveDialog<_BackgroundAppearanceAction>(
       context: context,
       builder: (context) {
         final theme = Theme.of(context);
         return AlertDialog.adaptive(
-          title: Text(L10n.of(context).profileBackgroundColor),
+          title: Text(
+            '${L10n.of(context).profileBackgroundColor} / ${L10n.of(context).profileBanner}',
+          ),
           content: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 320),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                for (final color in _backgroundPresets)
-                  InkWell(
-                    borderRadius: BorderRadius.circular(20),
-                    onTap: () => Navigator.of(
-                      context,
-                    ).pop(_BackgroundColorChoice(value: color.toARGB32())),
-                    child: Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: theme.colorScheme.outline),
-                      ),
-                    ),
+                FilledButton.tonalIcon(
+                  onPressed: () => Navigator.of(
+                    context,
+                  ).pop(_BackgroundAppearanceAction.backgroundColor),
+                  icon: const Icon(Icons.palette_outlined),
+                  label: const Text('Choose a background color'),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'or',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
                   ),
+                ),
+                const SizedBox(height: 10),
+                FilledButton.tonalIcon(
+                  onPressed: () => Navigator.of(
+                    context,
+                  ).pop(_BackgroundAppearanceAction.banner),
+                  icon: const Icon(Icons.landscape_outlined),
+                  label: const Text('Choose a banner'),
+                ),
               ],
             ),
           ),
@@ -575,18 +418,33 @@ class _UserDialogState extends State<UserDialog> {
               onPressed: () => Navigator.of(context).pop(),
               child: Text(L10n.of(context).cancel),
             ),
-            TextButton(
-              onPressed: () => Navigator.of(
-                context,
-              ).pop(const _BackgroundColorChoice(remove: true)),
-              child: Text(
-                L10n.of(context).remove,
-                style: TextStyle(color: theme.colorScheme.error),
-              ),
-            ),
           ],
         );
       },
+    );
+
+    if (action == null || !mounted) return;
+
+    switch (action) {
+      case _BackgroundAppearanceAction.backgroundColor:
+        await _showBackgroundPicker();
+        return;
+      case _BackgroundAppearanceAction.banner:
+        await _showBannerMenu();
+        return;
+    }
+  }
+
+  Future<void> _showBackgroundPicker() async {
+    if (!_isSelf) return;
+
+    final choice = await showAdaptiveDialog<_BackgroundColorChoice>(
+      context: context,
+      builder: (context) => _BackgroundColorPickerDialog(
+        initialColor:
+            _profileFields.backgroundColor ??
+            Theme.of(context).colorScheme.surfaceContainer,
+      ),
     );
 
     if (choice == null) return;
@@ -607,6 +465,7 @@ class _UserDialogState extends State<UserDialog> {
           profileBackgroundColorField,
           {profileBackgroundColorField: choice.value},
         );
+        await _client.deleteProfileField(_client.userID!, profileBannerField);
       },
     );
 
@@ -798,7 +657,7 @@ class _UserDialogState extends State<UserDialog> {
     required Color foreground,
     IconData? icon,
   }) {
-    final borderColor = Color.alphaBlend(foreground.withAlpha(100), background);
+    final borderColor = Color.lerp(foreground, background, 0.68) ?? foreground;
     return Container(
       constraints: const BoxConstraints(maxWidth: 300),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -806,13 +665,6 @@ class _UserDialogState extends State<UserDialog> {
         color: background,
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: borderColor, width: 1.2),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(22),
-            blurRadius: 14,
-            offset: const Offset(0, 6),
-          ),
-        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1010,50 +862,25 @@ class _UserDialogState extends State<UserDialog> {
                     Brightness.dark
               ? Colors.white
               : Colors.black;
-          final headerBackgroundSamples = hasBanner
-              ? _bannerStyle.backgroundSamples
-              : <Color>[headerColor];
-          final nameTextColors =
-              _displayNameGradientColors != null &&
-                  _displayNameGradientColors!.isNotEmpty
-              ? _displayNameGradientColors!
-              : [headerOnColor];
-          final namePillStyle = _resolveNamePillStyle(
-            backgroundSamples: headerBackgroundSamples,
-            textColors: nameTextColors,
-          );
+          final namePillStyle = _resolveNamePillStyle();
+          final controlSurfaceStyle = _resolveControlSurfaceStyle();
           final pillBackground = namePillStyle.background;
-          final statusForeground = _resolveReadableForeground(
-            background: pillBackground,
-            candidates: [
-              namePillStyle.fallbackTextColor,
-              headerOnColor,
-              theme.colorScheme.onSurface,
-              Colors.white,
-              Colors.black,
-            ],
+          final statusForeground = _resolveMonochromeContrastForeground(
+            pillBackground,
             targetContrast: 4.2,
           );
-          final warningBackground = Colors.red.withAlpha(48);
-          final warningForeground = _resolveReadableForeground(
-            background: warningBackground,
-            candidates: [
-              headerOnColor,
-              theme.colorScheme.onErrorContainer,
-              Colors.white,
-              Colors.black,
-            ],
+          final warningBackground = theme.colorScheme.errorContainer;
+          final warningForeground = _resolveMonochromeContrastForeground(
+            warningBackground,
             targetContrast: 4.2,
           );
-          final actionBackground = Color.alphaBlend(
-            headerOnColor.withAlpha(52),
-            headerColor,
-          );
+          final actionForeground = controlSurfaceStyle.foreground;
+          final actionBackground = controlSurfaceStyle.background;
+          final actionBorder = controlSurfaceStyle.border;
           final bannerOverlayColor = _bannerStyle.overlayColor.withAlpha(
             _bannerStyle.overlayAlpha,
           );
 
-          final presenceActivityText = _presenceActivityText(presence);
           final statusText = _statusText(presence);
           final emojiStatusUri = _profileFields.emojiStatusMxc;
 
@@ -1094,24 +921,26 @@ class _UserDialogState extends State<UserDialog> {
                                 children: [
                                   if (_isSelf)
                                     _HeaderIconButton(
-                                      tooltip: L10n.of(
-                                        context,
-                                      ).profileBackgroundColor,
-                                      foreground: headerOnColor,
+                                      tooltip:
+                                          '${L10n.of(context).profileBackgroundColor} / ${L10n.of(context).profileBanner}',
+                                      foreground: actionForeground,
                                       background: actionBackground,
-                                      onTap: _profileFields.bannerMxc == null
-                                          ? _showBackgroundPicker
-                                          : null,
+                                      border: actionBorder,
+                                      onTap: _showBackgroundAppearanceChooser,
                                       icon: Stack(
                                         clipBehavior: Clip.none,
                                         alignment: Alignment.center,
                                         children: [
-                                          const Icon(
-                                            Icons.palette_outlined,
+                                          Icon(
+                                            _profileFields.bannerMxc == null
+                                                ? Icons.wallpaper_outlined
+                                                : Icons.wallpaper,
                                             size: 18,
                                           ),
-                                          if (_profileFields.backgroundColor !=
-                                              null)
+                                          if (_profileFields.bannerMxc ==
+                                                  null &&
+                                              _profileFields.backgroundColor !=
+                                                  null)
                                             Positioned(
                                               right: -1,
                                               bottom: -1,
@@ -1123,7 +952,7 @@ class _UserDialogState extends State<UserDialog> {
                                                       .backgroundColor,
                                                   shape: BoxShape.circle,
                                                   border: Border.all(
-                                                    color: headerOnColor,
+                                                    color: actionForeground,
                                                     width: 0.8,
                                                   ),
                                                 ),
@@ -1132,27 +961,15 @@ class _UserDialogState extends State<UserDialog> {
                                         ],
                                       ),
                                     ),
-                                  if (_isSelf)
-                                    _HeaderIconButton(
-                                      tooltip: L10n.of(context).profileBanner,
-                                      foreground: headerOnColor,
-                                      background: actionBackground,
-                                      onTap: _showBannerMenu,
-                                      icon: Icon(
-                                        _profileFields.bannerMxc == null
-                                            ? Icons.landscape_outlined
-                                            : Icons.landscape,
-                                        size: 18,
-                                      ),
-                                    ),
                                   if (_isSelf ||
                                       _profileFields.emojiStatusMxc != null)
                                     _HeaderIconButton(
                                       tooltip: L10n.of(
                                         context,
                                       ).profileEmojiStatus,
-                                      foreground: headerOnColor,
+                                      foreground: actionForeground,
                                       background: actionBackground,
+                                      border: actionBorder,
                                       onTap: _isSelf
                                           ? _showEmojiStatusMenu
                                           : null,
@@ -1206,6 +1023,8 @@ class _UserDialogState extends State<UserDialog> {
                             presenceBackgroundColor: headerColor,
                             showOfflinePresenceDot: true,
                             showPresenceTooltip: true,
+                            presenceTooltipBuilder: (_, dotPresence) =>
+                                _presenceDotTooltipText(dotPresence),
                             onTap: avatar != null
                                 ? () => showDialog(
                                     context: context,
@@ -1237,8 +1056,6 @@ class _UserDialogState extends State<UserDialog> {
                                     client: _client,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    onGradientColorsChanged:
-                                        _onDisplayNameGradientColorsChanged,
                                     style: TextStyle(
                                       color: namePillStyle.fallbackTextColor,
                                       fontWeight: FontWeight.w700,
@@ -1262,18 +1079,6 @@ class _UserDialogState extends State<UserDialog> {
                               ],
                             ),
                           ),
-                          if (presenceActivityText != null)
-                            Padding(
-                              padding: EdgeInsets.only(top: 4 * scale),
-                              child: Text(
-                                presenceActivityText,
-                                style: TextStyle(
-                                  color: headerOnColor.withAlpha(140),
-                                  fontSize: 12 * scale,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
                           if (statusText != null) ...[
                             SizedBox(height: 10 * scale),
                             _buildStatusPill(
@@ -1299,29 +1104,33 @@ class _UserDialogState extends State<UserDialog> {
                               _ProfileActionButton(
                                 label: L10n.of(context).profileActionMessage,
                                 icon: Icons.chat_bubble_outline,
-                                foreground: headerOnColor,
+                                foreground: actionForeground,
                                 background: actionBackground,
+                                border: actionBorder,
                                 onTap: _isSelf ? null : _openMessage,
                               ),
                               _ProfileActionButton(
                                 label: L10n.of(context).profileActionMute,
                                 icon: Icons.notifications_off_outlined,
-                                foreground: headerOnColor,
+                                foreground: actionForeground,
                                 background: actionBackground,
+                                border: actionBorder,
                                 onTap: _isSelf ? null : _toggleMute,
                               ),
                               _ProfileActionButton(
                                 label: L10n.of(context).profileActionCall,
                                 icon: Icons.call_outlined,
-                                foreground: headerOnColor,
+                                foreground: actionForeground,
                                 background: actionBackground,
+                                border: actionBorder,
                                 onTap: _isSelf ? null : _callAction,
                               ),
                               _ProfileActionButton(
                                 label: L10n.of(context).more.toLowerCase(),
                                 icon: Icons.more_horiz,
-                                foreground: headerOnColor,
+                                foreground: actionForeground,
                                 background: actionBackground,
+                                border: actionBorder,
                                 onTap: _openMoreMenu,
                               ),
                             ],
@@ -1360,6 +1169,7 @@ class _ProfileActionButton extends StatelessWidget {
   final String label;
   final Color foreground;
   final Color background;
+  final Color border;
   final VoidCallback? onTap;
 
   const _ProfileActionButton({
@@ -1367,36 +1177,41 @@ class _ProfileActionButton extends StatelessWidget {
     required this.label,
     required this.foreground,
     required this.background,
+    required this.border,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final enabled = onTap != null;
+    final radius = BorderRadius.circular(AppConfig.borderRadius / 2);
+    final effectiveForeground = enabled
+        ? foreground
+        : Color.lerp(foreground, background, 0.45) ?? foreground;
     return Expanded(
-      child: Opacity(
-        opacity: enabled ? 1 : 0.45,
-        child: Material(
-          color: background,
-          borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-            onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, color: foreground),
-                  const SizedBox(height: 5),
-                  Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: foreground, fontSize: 12.5),
-                  ),
-                ],
-              ),
+      child: Material(
+        color: background,
+        shape: RoundedRectangleBorder(
+          borderRadius: radius,
+          side: BorderSide(color: border, width: 1),
+        ),
+        child: InkWell(
+          borderRadius: radius,
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: effectiveForeground),
+                const SizedBox(height: 5),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: effectiveForeground, fontSize: 12.5),
+                ),
+              ],
             ),
           ),
         ),
@@ -1410,6 +1225,7 @@ class _HeaderIconButton extends StatelessWidget {
   final Widget icon;
   final Color foreground;
   final Color background;
+  final Color border;
   final VoidCallback? onTap;
 
   const _HeaderIconButton({
@@ -1417,28 +1233,199 @@ class _HeaderIconButton extends StatelessWidget {
     required this.icon,
     required this.foreground,
     required this.background,
+    required this.border,
     this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final effectiveForeground = onTap == null
+        ? Color.lerp(foreground, background, 0.4) ?? foreground
+        : foreground;
     final content = IconTheme.merge(
-      data: IconThemeData(color: foreground),
+      data: IconThemeData(color: effectiveForeground),
       child: SizedBox(width: 36, height: 36, child: Center(child: icon)),
     );
-    final button = Opacity(
-      opacity: onTap == null ? 0.7 : 1,
-      child: Material(
-        color: background,
+    final button = Material(
+      color: background,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
-          child: content,
-        ),
+        side: BorderSide(color: border, width: 1),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: content,
       ),
     );
     return Tooltip(message: tooltip, child: button);
+  }
+}
+
+class _BackgroundColorPickerDialog extends StatefulWidget {
+  final Color initialColor;
+
+  const _BackgroundColorPickerDialog({required this.initialColor});
+
+  @override
+  State<_BackgroundColorPickerDialog> createState() =>
+      _BackgroundColorPickerDialogState();
+}
+
+class _BackgroundColorPickerDialogState
+    extends State<_BackgroundColorPickerDialog> {
+  static const _pickerSize = 220.0;
+
+  late double _hue;
+  late double _saturation;
+  late double _value;
+
+  @override
+  void initState() {
+    super.initState();
+    final hsv = HSVColor.fromColor(widget.initialColor.withAlpha(255));
+    _hue = hsv.hue;
+    _saturation = hsv.saturation;
+    _value = hsv.value;
+  }
+
+  Color get _currentColor =>
+      HSVColor.fromAHSV(1, _hue, _saturation, _value).toColor();
+
+  void _updateColorFromOffset(Offset localPosition, double size) {
+    if (size <= 0) return;
+    final dx = localPosition.dx.clamp(0.0, size);
+    final dy = localPosition.dy.clamp(0.0, size);
+    setState(() {
+      _saturation = dx / size;
+      _value = 1 - (dy / size);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hueColor = HSVColor.fromAHSV(1, _hue, 1, 1).toColor();
+    const pickerSize = _pickerSize;
+
+    return AlertDialog.adaptive(
+      title: Text(L10n.of(context).profileBackgroundColor),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 320),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Align(
+              alignment: Alignment.center,
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: _currentColor,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: theme.colorScheme.outline),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.center,
+              child: GestureDetector(
+                onTapDown: (details) =>
+                    _updateColorFromOffset(details.localPosition, pickerSize),
+                onPanDown: (details) =>
+                    _updateColorFromOffset(details.localPosition, pickerSize),
+                onPanUpdate: (details) =>
+                    _updateColorFromOffset(details.localPosition, pickerSize),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: SizedBox(
+                    width: pickerSize,
+                    height: pickerSize,
+                    child: Stack(
+                      children: [
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [Colors.white, hueColor],
+                            ),
+                          ),
+                          child: const SizedBox.expand(),
+                        ),
+                        const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [Colors.transparent, Colors.black],
+                            ),
+                          ),
+                          child: SizedBox.expand(),
+                        ),
+                        Positioned(
+                          left:
+                              (_saturation * pickerSize).clamp(
+                                0.0,
+                                pickerSize,
+                              ) -
+                              8,
+                          top:
+                              ((1 - _value) * pickerSize).clamp(
+                                0.0,
+                                pickerSize,
+                              ) -
+                              8,
+                          child: Container(
+                            width: 16,
+                            height: 16,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 2),
+                              boxShadow: const [
+                                BoxShadow(color: Colors.black26, blurRadius: 4),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Slider(
+              min: 0,
+              max: 360,
+              value: _hue,
+              onChanged: (value) => setState(() => _hue = value),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(L10n.of(context).cancel),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(
+            context,
+          ).pop(const _BackgroundColorChoice(remove: true)),
+          child: Text(
+            L10n.of(context).remove,
+            style: TextStyle(color: theme.colorScheme.error),
+          ),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(
+            context,
+          ).pop(_BackgroundColorChoice(value: _currentColor.toARGB32())),
+          child: Text(L10n.of(context).ok),
+        ),
+      ],
+    );
   }
 }
 
@@ -1450,6 +1437,8 @@ class _BackgroundColorChoice {
 }
 
 enum _UserMoreAction { copy, share, report, block }
+
+enum _BackgroundAppearanceAction { backgroundColor, banner }
 
 enum _BannerAction { pickImage, remove }
 
@@ -1467,14 +1456,14 @@ class _NamePillStyle {
   });
 }
 
-class _NameOverlayCandidate {
-  final Color overlayColor;
-  final int alpha;
-  final double minContrast;
+class _ControlSurfaceStyle {
+  final Color foreground;
+  final Color background;
+  final Color border;
 
-  const _NameOverlayCandidate({
-    required this.overlayColor,
-    required this.alpha,
-    required this.minContrast,
+  const _ControlSurfaceStyle({
+    required this.foreground,
+    required this.background,
+    required this.border,
   });
 }

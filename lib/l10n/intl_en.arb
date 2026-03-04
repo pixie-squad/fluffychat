@@ -3144,5 +3144,6 @@
     "profileActionMessage": "message",
     "profileActionMute": "mute",
     "profileActionCall": "call",
-    "owner": "Owner"
+    "owner": "Owner",
+    "groupAsAlbum": "Group as album"
 }

@@ -23,6 +23,8 @@ class Avatar extends StatelessWidget {
   final Color? textColor;
   final bool showOfflinePresenceDot;
   final bool showPresenceTooltip;
+  final String Function(BuildContext context, CachedPresence presence)?
+      presenceTooltipBuilder;
 
   const Avatar({
     this.mxContent,
@@ -39,6 +41,7 @@ class Avatar extends StatelessWidget {
     this.textColor,
     this.showOfflinePresenceDot = false,
     this.showPresenceTooltip = false,
+    this.presenceTooltipBuilder,
     super.key,
   });
 
@@ -126,16 +129,15 @@ class Avatar extends StatelessWidget {
                   ? Colors.orange
                   : Colors.grey;
               final l10n = L10n.of(context);
-              final presenceTooltip = presence.presence.isOnline
+              final defaultPresenceTooltip = presence.presence.isOnline
                   ? l10n.online
                   : presence.presence.isUnavailable
                   ? l10n.unavailable
                   : l10n.offline;
-              // Place dot center on the circle edge at the 45° diagonal.
-              // For a circle of diameter `size`, the offset from the
-              // corner is  size/2 * (1 - cos(45°)) ≈ size * 0.146.
-              // Subtract half the dot container width (8) so the
-              // Positioned edge-offset keeps the center on the arc.
+              final presenceTooltip =
+                  presenceTooltipBuilder?.call(context, presence) ??
+                  defaultPresenceTooltip;
+
               final dotInset = (size * 0.146 - 8).clamp(0.0, size * 0.5);
               Widget dot = Container(
                 width: 16,
@@ -155,7 +157,7 @@ class Avatar extends StatelessWidget {
                   ),
                 ),
               );
-              if (showPresenceTooltip) {
+              if (showPresenceTooltip && presenceTooltip.isNotEmpty) {
                 dot = Tooltip(message: presenceTooltip, child: dot);
               }
               return Positioned(

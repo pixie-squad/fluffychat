@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'package:collection/collection.dart';
+import 'package:matrix/matrix.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
 
 import 'package:fluffychat/config/themes.dart';
@@ -42,6 +43,34 @@ class ChatEventList extends StatelessWidget {
     final thisEventsKeyMap = <String, int>{};
     for (var i = 0; i < events.length; i++) {
       thisEventsKeyMap[events[i].eventId] = i;
+    }
+
+    // Build album grouping maps.
+    // albumGroups: albumId -> list of events (in display order, oldest first)
+    // albumAnchorIds: eventId of the anchor event (oldest) for each album
+    // albumContinuationIds: eventIds of non-anchor events that should be hidden
+    final albumGroups = <String, List<Event>>{};
+    final albumAnchorIds = <String, String>{};
+    final albumContinuationIds = <String>{};
+    for (final event in events) {
+      final albumId =
+          event.content.tryGet<String>('r.trd.album_id');
+      if (albumId != null) {
+        albumGroups.putIfAbsent(albumId, () => []);
+        albumGroups[albumId]!.add(event);
+      }
+    }
+    for (final entry in albumGroups.entries) {
+      if (entry.value.length < 2) continue;
+      // Events list is reversed (newest first), so the last item is the oldest
+      // (displayed first visually). That's our anchor.
+      final anchor = entry.value.last;
+      albumAnchorIds[anchor.eventId] = entry.key;
+      for (final event in entry.value) {
+        if (event.eventId != anchor.eventId) {
+          albumContinuationIds.add(event.eventId);
+        }
+      }
     }
 
     final hasWallpaper =
@@ -138,6 +167,13 @@ class ChatEventList extends StatelessWidget {
                 previousEvent?.isCollapsedState == true &&
                 !controller.expandedEventIds.contains(event.eventId);
 
+            // Album grouping
+            final isAlbumContinuation =
+                albumContinuationIds.contains(event.eventId);
+            final albumId = albumAnchorIds[event.eventId];
+            final albumEvents =
+                albumId != null ? albumGroups[albumId] : null;
+
             return AutoScrollTag(
               key: ValueKey(event.eventId),
               index: i,
@@ -183,6 +219,8 @@ class ChatEventList extends StatelessWidget {
                         !controller.expandedEventIds.contains(event.eventId),
                       )
                     : null,
+                albumEvents: albumEvents,
+                isAlbumContinuation: isAlbumContinuation,
               ),
             );
           },

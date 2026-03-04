@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(grep -n \"RawKeyboardListener\\\\|KeyboardListener\\\\|LogicalKeyboardKey\\\\|Control.v\\\\|Cmd.v\\\\|paste\\\\|onKey\" /c/Users/Melted/Desktop/fluffychat/lib/pages/chat/*.dart)"
+      "Bash(grep -n \"RawKeyboardListener\\\\|KeyboardListener\\\\|LogicalKeyboardKey\\\\|Control.v\\\\|Cmd.v\\\\|paste\\\\|onKey\" /c/Users/Melted/Desktop/fluffychat/lib/pages/chat/*.dart)",
+      "Bash(xargs grep -l \"sendFileEvent\")",
+      "Bash(xargs wc -l)",
+      "Bash(xargs grep -l \"class Event\")"
     ]
   }
 }
