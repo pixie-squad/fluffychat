@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,8 +14,10 @@ import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/file_selector.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
 import 'package:fluffychat/utils/name_gradients.dart';
+import 'package:fluffychat/utils/profile_banner_style.dart';
 import 'package:fluffychat/utils/profile_card_fields.dart';
 import 'package:fluffychat/utils/client_manager.dart';
+import 'package:fluffychat/utils/client_download_content_extension.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
@@ -61,6 +65,9 @@ class _UserDialogState extends State<UserDialog> {
   ProfileCardFields _profileFields = const ProfileCardFields();
   bool _fieldsLoading = false;
   bool _copiedMxid = false;
+  List<Color>? _displayNameGradientColors;
+  ProfileBannerStyle _bannerStyle = ProfileBannerStyle.fallback;
+  int _bannerStyleRequestId = 0;
 
   Client get _client => Matrix.of(context).client;
 
@@ -85,6 +92,39 @@ class _UserDialogState extends State<UserDialog> {
       _profileFields = fields;
       _fieldsLoading = false;
     });
+    _refreshBannerStyle(fields.bannerMxc);
+  }
+
+  Future<void> _refreshBannerStyle(Uri? bannerUri) async {
+    final requestId = ++_bannerStyleRequestId;
+    if (bannerUri == null) {
+      if (!mounted || requestId != _bannerStyleRequestId) return;
+      setState(() {
+        _bannerStyle = ProfileBannerStyle.fallback;
+      });
+      return;
+    }
+
+    final style = await _resolveBannerStyle(bannerUri);
+    if (!mounted || requestId != _bannerStyleRequestId) return;
+    setState(() {
+      _bannerStyle = style;
+    });
+  }
+
+  Future<ProfileBannerStyle> _resolveBannerStyle(Uri bannerUri) async {
+    try {
+      final data = await _client.downloadMxcCached(
+        bannerUri,
+        width: 640,
+        height: 320,
+        isThumbnail: true,
+      );
+      return resolveProfileBannerStyleFromBytes(data);
+    } catch (e, s) {
+      Logs().d('Unable to resolve profile banner style', e, s);
+      return ProfileBannerStyle.fallback;
+    }
   }
 
   String? _presenceActivityText(CachedPresence? presence) {
@@ -104,6 +144,221 @@ class _UserDialogState extends State<UserDialog> {
     final statusMsg = presence?.statusMsg?.trim();
     if (statusMsg == null || statusMsg.isEmpty) return null;
     return statusMsg;
+  }
+
+  bool _sameColorList(List<Color>? first, List<Color>? second) {
+    if (identical(first, second)) return true;
+    if (first == null || second == null) return false;
+    if (first.length != second.length) return false;
+    for (var i = 0; i < first.length; i++) {
+      if (first[i].toARGB32() != second[i].toARGB32()) return false;
+    }
+    return true;
+  }
+
+  void _onDisplayNameGradientColorsChanged(List<Color>? colors) {
+    final next = colors == null ? null : List<Color>.from(colors);
+    if (_sameColorList(_displayNameGradientColors, next)) return;
+    if (!mounted) return;
+    setState(() => _displayNameGradientColors = next);
+  }
+
+  _NamePillStyle _resolveNamePillStyle({
+    required List<Color> backgroundSamples,
+    required List<Color> textColors,
+  }) {
+    final safeBackgroundSamples = backgroundSamples.isEmpty
+        ? [Theme.of(context).colorScheme.surface]
+        : backgroundSamples;
+    final safeTextColors = textColors.isEmpty ? [Colors.white] : textColors;
+
+    const targetContrast = 3.8;
+    const minOverlayAlpha = 72;
+    const maxOverlayAlpha = 236;
+    const alphaStep = 4;
+
+    final darkCandidate = _findOverlayCandidate(
+      overlayColor: Colors.black,
+      backgroundSamples: safeBackgroundSamples,
+      textColors: safeTextColors,
+      targetContrast: targetContrast,
+      minAlpha: minOverlayAlpha,
+      maxAlpha: maxOverlayAlpha,
+      alphaStep: alphaStep,
+    );
+    final lightCandidate = _findOverlayCandidate(
+      overlayColor: Colors.white,
+      backgroundSamples: safeBackgroundSamples,
+      textColors: safeTextColors,
+      targetContrast: targetContrast,
+      minAlpha: minOverlayAlpha,
+      maxAlpha: maxOverlayAlpha,
+      alphaStep: alphaStep,
+    );
+    final selected = _pickOverlayCandidate(
+      darkCandidate: darkCandidate,
+      lightCandidate: lightCandidate,
+      targetContrast: targetContrast,
+    );
+
+    final representativeBackground = _averageColor(safeBackgroundSamples);
+    final background = Color.alphaBlend(
+      selected.overlayColor.withAlpha(selected.alpha),
+      representativeBackground,
+    );
+    final fallbackTextColor =
+        ThemeData.estimateBrightnessForColor(background) == Brightness.dark
+        ? Colors.white
+        : Colors.black;
+    final border = Color.alphaBlend(
+      fallbackTextColor.withAlpha(128),
+      background,
+    );
+
+    return _NamePillStyle(
+      background: background,
+      border: border,
+      fallbackTextColor: fallbackTextColor,
+    );
+  }
+
+  _NameOverlayCandidate _findOverlayCandidate({
+    required Color overlayColor,
+    required List<Color> backgroundSamples,
+    required List<Color> textColors,
+    required double targetContrast,
+    required int minAlpha,
+    required int maxAlpha,
+    required int alphaStep,
+  }) {
+    var best = _NameOverlayCandidate(
+      overlayColor: overlayColor,
+      alpha: minAlpha,
+      minContrast: 0,
+    );
+    for (var alpha = minAlpha; alpha <= maxAlpha; alpha += alphaStep) {
+      final contrast = _minimumContrastForOverlay(
+        overlayColor: overlayColor,
+        alpha: alpha,
+        backgroundSamples: backgroundSamples,
+        textColors: textColors,
+      );
+      if (contrast > best.minContrast) {
+        best = _NameOverlayCandidate(
+          overlayColor: overlayColor,
+          alpha: alpha,
+          minContrast: contrast,
+        );
+      }
+      if (contrast >= targetContrast) {
+        return _NameOverlayCandidate(
+          overlayColor: overlayColor,
+          alpha: alpha,
+          minContrast: contrast,
+        );
+      }
+    }
+    return best;
+  }
+
+  _NameOverlayCandidate _pickOverlayCandidate({
+    required _NameOverlayCandidate darkCandidate,
+    required _NameOverlayCandidate lightCandidate,
+    required double targetContrast,
+  }) {
+    final darkPasses = darkCandidate.minContrast >= targetContrast;
+    final lightPasses = lightCandidate.minContrast >= targetContrast;
+
+    if (darkPasses && lightPasses) {
+      if (darkCandidate.alpha != lightCandidate.alpha) {
+        return darkCandidate.alpha < lightCandidate.alpha
+            ? darkCandidate
+            : lightCandidate;
+      }
+      return darkCandidate.minContrast >= lightCandidate.minContrast
+          ? darkCandidate
+          : lightCandidate;
+    }
+    if (darkPasses) return darkCandidate;
+    if (lightPasses) return lightCandidate;
+    return darkCandidate.minContrast >= lightCandidate.minContrast
+        ? darkCandidate
+        : lightCandidate;
+  }
+
+  double _minimumContrastForOverlay({
+    required Color overlayColor,
+    required int alpha,
+    required List<Color> backgroundSamples,
+    required List<Color> textColors,
+  }) {
+    var minContrast = double.infinity;
+    for (final background in backgroundSamples) {
+      final containerColor = Color.alphaBlend(
+        overlayColor.withAlpha(alpha),
+        background,
+      );
+      for (final textColor in textColors) {
+        final contrast = _contrastRatio(textColor, containerColor);
+        if (contrast < minContrast) minContrast = contrast;
+      }
+    }
+    return minContrast;
+  }
+
+  double _contrastRatio(Color first, Color second) {
+    final l1 = first.computeLuminance();
+    final l2 = second.computeLuminance();
+    final lighter = math.max(l1, l2);
+    final darker = math.min(l1, l2);
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
+  Color _resolveReadableForeground({
+    required Color background,
+    required List<Color> candidates,
+    double targetContrast = 4.0,
+  }) {
+    if (candidates.isEmpty) return Colors.white;
+
+    var bestColor = candidates.first;
+    var bestContrast = _contrastRatio(bestColor, background);
+    if (bestContrast >= targetContrast) return bestColor;
+
+    for (var i = 1; i < candidates.length; i++) {
+      final candidate = candidates[i];
+      final contrast = _contrastRatio(candidate, background);
+      if (contrast > bestContrast) {
+        bestContrast = contrast;
+        bestColor = candidate;
+      }
+      if (contrast >= targetContrast) return candidate;
+    }
+
+    return bestColor;
+  }
+
+  Color _averageColor(List<Color> colors) {
+    var alphaTotal = 0;
+    var redTotal = 0;
+    var greenTotal = 0;
+    var blueTotal = 0;
+
+    for (final color in colors) {
+      final argb = color.toARGB32();
+      alphaTotal += (argb >> 24) & 0xFF;
+      redTotal += (argb >> 16) & 0xFF;
+      greenTotal += (argb >> 8) & 0xFF;
+      blueTotal += argb & 0xFF;
+    }
+
+    final count = colors.length;
+    return Color.fromARGB(
+      alphaTotal ~/ count,
+      redTotal ~/ count,
+      greenTotal ~/ count,
+      blueTotal ~/ count,
+    );
   }
 
   Future<void> _copyMxid() async {
@@ -282,6 +537,7 @@ class _UserDialogState extends State<UserDialog> {
 
   Future<void> _showBackgroundPicker() async {
     if (!_isSelf) return;
+    if (_profileFields.bannerMxc != null) return;
 
     final choice = await showAdaptiveDialog<_BackgroundColorChoice>(
       context: context,
@@ -356,6 +612,91 @@ class _UserDialogState extends State<UserDialog> {
 
     if (!mounted) return;
     await _reloadProfileFields();
+  }
+
+  Future<void> _pickBannerImage() async {
+    if (!_isSelf) return;
+
+    final selected = await selectFiles(context, type: FileType.image);
+    if (selected.isEmpty) return;
+
+    await showFutureLoadingDialog(
+      context: context,
+      future: () async {
+        final picked = selected.first;
+        final image = MatrixImageFile(
+          bytes: await picked.readAsBytes(),
+          name: picked.name,
+        );
+
+        final uri = await _client.uploadContent(
+          image.bytes,
+          filename: image.name,
+          contentType: image.mimeType,
+        );
+
+        await _client.setProfileField(_client.userID!, profileBannerField, {
+          profileBannerField: uri.toString(),
+        });
+        await _client.deleteProfileField(
+          _client.userID!,
+          profileBackgroundColorField,
+        );
+      },
+    );
+
+    if (!mounted) return;
+    await _reloadProfileFields();
+  }
+
+  Future<void> _removeBanner() async {
+    if (!_isSelf) return;
+
+    await showFutureLoadingDialog(
+      context: context,
+      future: () =>
+          _client.deleteProfileField(_client.userID!, profileBannerField),
+    );
+
+    if (!mounted) return;
+    await _reloadProfileFields();
+  }
+
+  Future<void> _showBannerMenu() async {
+    if (!_isSelf) return;
+
+    final action = await showModalActionPopup<_BannerAction>(
+      context: context,
+      title: L10n.of(context).profileBanner,
+      cancelLabel: L10n.of(context).cancel,
+      useRootNavigator: false,
+      actions: [
+        AdaptiveModalAction(
+          label: L10n.of(context).profilePickImage,
+          icon: const Icon(Icons.image_outlined),
+          value: _BannerAction.pickImage,
+          isDefaultAction: true,
+        ),
+        if (_profileFields.bannerMxc != null)
+          AdaptiveModalAction(
+            label: L10n.of(context).remove,
+            icon: const Icon(Icons.delete_outline),
+            value: _BannerAction.remove,
+            isDestructive: true,
+          ),
+      ],
+    );
+
+    if (action == null) return;
+
+    switch (action) {
+      case _BannerAction.pickImage:
+        await _pickBannerImage();
+        return;
+      case _BannerAction.remove:
+        await _removeBanner();
+        return;
+    }
   }
 
   Future<void> _pickEmojiStatusImage() async {
@@ -457,10 +798,7 @@ class _UserDialogState extends State<UserDialog> {
     required Color foreground,
     IconData? icon,
   }) {
-    final borderColor = Color.alphaBlend(
-      foreground.withAlpha(100),
-      background,
-    );
+    final borderColor = Color.alphaBlend(foreground.withAlpha(100), background);
     return Container(
       constraints: const BoxConstraints(maxWidth: 300),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -633,25 +971,19 @@ class _UserDialogState extends State<UserDialog> {
     final theme = Theme.of(context);
     final avatar = widget.profile.avatarUrl;
     final screenSize = MediaQuery.sizeOf(context);
-    final maxDialogWidth = (screenSize.width - 24).clamp(320.0, 760.0).toDouble();
-    final targetDialogWidth = (screenSize.width * 0.35)
-        .clamp(320.0, 620.0)
-        .toDouble();
+    final maxDialogWidth = (screenSize.width - 24).clamp(320.0, 760.0);
+    final targetDialogWidth = (screenSize.width * 0.35).clamp(320.0, 620.0);
     final dialogWidth = targetDialogWidth > maxDialogWidth
         ? maxDialogWidth
         : targetDialogWidth;
 
-    final maxDialogHeight = (screenSize.height - 24)
-        .clamp(360.0, 1200.0)
-        .toDouble();
-    final targetDialogHeight = (screenSize.height * 0.8)
-        .clamp(420.0, 980.0)
-        .toDouble();
+    final maxDialogHeight = (screenSize.height - 24).clamp(360.0, 1200.0);
+    final targetDialogHeight = (screenSize.height * 0.8).clamp(420.0, 980.0);
     final dialogHeight = targetDialogHeight > maxDialogHeight
         ? maxDialogHeight
         : targetDialogHeight;
 
-    final scale = (dialogWidth / 460).clamp(1.0, 1.35).toDouble();
+    final scale = (dialogWidth / 460).clamp(1.0, 1.35);
     final avatarSize = 96.0 * scale;
     final headerTopPadding = 14.0 * scale;
     final headerHorizontalPadding = 18.0 * scale;
@@ -666,22 +998,59 @@ class _UserDialogState extends State<UserDialog> {
         userId: widget.profile.userId,
         client: _client,
         builder: (context, presence) {
-          final headerColor =
-              _profileFields.backgroundColor ??
-              theme.colorScheme.surfaceContainer;
-          final headerOnColor =
-              ThemeData.estimateBrightnessForColor(headerColor) ==
-                  Brightness.dark
+          final bannerUri = _profileFields.bannerMxc;
+          final hasBanner = bannerUri != null;
+          final headerColor = hasBanner
+              ? _bannerStyle.representativeBackground
+              : _profileFields.backgroundColor ??
+                    theme.colorScheme.surfaceContainer;
+          final headerOnColor = hasBanner
+              ? _bannerStyle.foregroundColor
+              : ThemeData.estimateBrightnessForColor(headerColor) ==
+                    Brightness.dark
               ? Colors.white
               : Colors.black;
-
-          final pillBackground = Color.alphaBlend(
-            headerOnColor.withAlpha(82),
-            headerColor,
+          final headerBackgroundSamples = hasBanner
+              ? _bannerStyle.backgroundSamples
+              : <Color>[headerColor];
+          final nameTextColors =
+              _displayNameGradientColors != null &&
+                  _displayNameGradientColors!.isNotEmpty
+              ? _displayNameGradientColors!
+              : [headerOnColor];
+          final namePillStyle = _resolveNamePillStyle(
+            backgroundSamples: headerBackgroundSamples,
+            textColors: nameTextColors,
+          );
+          final pillBackground = namePillStyle.background;
+          final statusForeground = _resolveReadableForeground(
+            background: pillBackground,
+            candidates: [
+              namePillStyle.fallbackTextColor,
+              headerOnColor,
+              theme.colorScheme.onSurface,
+              Colors.white,
+              Colors.black,
+            ],
+            targetContrast: 4.2,
+          );
+          final warningBackground = Colors.red.withAlpha(48);
+          final warningForeground = _resolveReadableForeground(
+            background: warningBackground,
+            candidates: [
+              headerOnColor,
+              theme.colorScheme.onErrorContainer,
+              Colors.white,
+              Colors.black,
+            ],
+            targetContrast: 4.2,
           );
           final actionBackground = Color.alphaBlend(
             headerOnColor.withAlpha(52),
             headerColor,
+          );
+          final bannerOverlayColor = _bannerStyle.overlayColor.withAlpha(
+            _bannerStyle.overlayAlpha,
           );
 
           final presenceActivityText = _presenceActivityText(presence);
@@ -691,241 +1060,291 @@ class _UserDialogState extends State<UserDialog> {
           return SizedBox(
             width: dialogWidth,
             height: dialogHeight,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+            child: Stack(
+              fit: StackFit.expand,
               children: [
-                Container(
-                  color: headerColor,
-                  padding: EdgeInsets.fromLTRB(
-                    headerHorizontalPadding,
-                    headerTopPadding,
-                    headerHorizontalPadding,
-                    headerBottomPadding,
+                ColoredBox(color: headerColor),
+                if (hasBanner)
+                  MxcImage(
+                    uri: bannerUri,
+                    width: dialogWidth,
+                    height: dialogHeight,
+                    fit: BoxFit.cover,
+                    isThumbnail: true,
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Row(
+                if (hasBanner) ColoredBox(color: bannerOverlayColor),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        headerHorizontalPadding,
+                        headerTopPadding,
+                        headerHorizontalPadding,
+                        headerBottomPadding,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           Row(
-                            spacing: 8,
-                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              if (_isSelf)
-                                _HeaderIconButton(
-                                  tooltip: L10n.of(context).profileBackgroundColor,
-                                  foreground: headerOnColor,
-                                  background: actionBackground,
-                                  onTap: _showBackgroundPicker,
-                                  icon: Stack(
-                                    clipBehavior: Clip.none,
-                                    alignment: Alignment.center,
-                                    children: [
-                                      const Icon(Icons.palette_outlined, size: 18),
-                                      if (_profileFields.backgroundColor != null)
-                                        Positioned(
-                                          right: -1,
-                                          bottom: -1,
-                                          child: Container(
-                                            width: 8,
-                                            height: 8,
-                                            decoration: BoxDecoration(
-                                              color: _profileFields.backgroundColor,
-                                              shape: BoxShape.circle,
-                                              border: Border.all(
-                                                color: headerOnColor,
-                                                width: 0.8,
+                              Row(
+                                spacing: 8,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (_isSelf)
+                                    _HeaderIconButton(
+                                      tooltip: L10n.of(
+                                        context,
+                                      ).profileBackgroundColor,
+                                      foreground: headerOnColor,
+                                      background: actionBackground,
+                                      onTap: _profileFields.bannerMxc == null
+                                          ? _showBackgroundPicker
+                                          : null,
+                                      icon: Stack(
+                                        clipBehavior: Clip.none,
+                                        alignment: Alignment.center,
+                                        children: [
+                                          const Icon(
+                                            Icons.palette_outlined,
+                                            size: 18,
+                                          ),
+                                          if (_profileFields.backgroundColor !=
+                                              null)
+                                            Positioned(
+                                              right: -1,
+                                              bottom: -1,
+                                              child: Container(
+                                                width: 8,
+                                                height: 8,
+                                                decoration: BoxDecoration(
+                                                  color: _profileFields
+                                                      .backgroundColor,
+                                                  shape: BoxShape.circle,
+                                                  border: Border.all(
+                                                    color: headerOnColor,
+                                                    width: 0.8,
+                                                  ),
+                                                ),
                                               ),
                                             ),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              if (_isSelf || _profileFields.emojiStatusMxc != null)
-                                _HeaderIconButton(
-                                  tooltip: L10n.of(context).profileEmojiStatus,
-                                  foreground: headerOnColor,
-                                  background: actionBackground,
-                                  onTap: _isSelf ? _showEmojiStatusMenu : null,
-                                  icon: _profileFields.emojiStatusMxc == null
-                                      ? const Icon(Icons.add_reaction_outlined, size: 18)
-                                      : ClipRRect(
-                                          borderRadius: BorderRadius.circular(999),
-                                          child: MxcImage(
-                                            uri: _profileFields.emojiStatusMxc,
-                                            width: 20,
-                                            height: 20,
-                                            fit: BoxFit.cover,
-                                            isThumbnail: true,
-                                          ),
-                                        ),
-                                ),
-                              if (_fieldsLoading)
-                                SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator.adaptive(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      headerOnColor,
+                                        ],
+                                      ),
+                                    ),
+                                  if (_isSelf)
+                                    _HeaderIconButton(
+                                      tooltip: L10n.of(context).profileBanner,
+                                      foreground: headerOnColor,
+                                      background: actionBackground,
+                                      onTap: _showBannerMenu,
+                                      icon: Icon(
+                                        _profileFields.bannerMxc == null
+                                            ? Icons.landscape_outlined
+                                            : Icons.landscape,
+                                        size: 18,
+                                      ),
+                                    ),
+                                  if (_isSelf ||
+                                      _profileFields.emojiStatusMxc != null)
+                                    _HeaderIconButton(
+                                      tooltip: L10n.of(
+                                        context,
+                                      ).profileEmojiStatus,
+                                      foreground: headerOnColor,
+                                      background: actionBackground,
+                                      onTap: _isSelf
+                                          ? _showEmojiStatusMenu
+                                          : null,
+                                      icon:
+                                          _profileFields.emojiStatusMxc == null
+                                          ? const Icon(
+                                              Icons.add_reaction_outlined,
+                                              size: 18,
+                                            )
+                                          : ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(999),
+                                              child: MxcImage(
+                                                uri: _profileFields
+                                                    .emojiStatusMxc,
+                                                width: 20,
+                                                height: 20,
+                                                fit: BoxFit.cover,
+                                                isThumbnail: true,
+                                              ),
+                                            ),
+                                    ),
+                                  if (_fieldsLoading)
+                                    SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator.adaptive(
+                                        strokeWidth: 2,
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                              headerOnColor,
+                                            ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const Spacer(),
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                icon: Icon(Icons.close, color: headerOnColor),
+                                onPressed: () => Navigator.of(context).pop(),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Avatar(
+                            mxContent: avatar,
+                            name: _displayname,
+                            size: avatarSize,
+                            presenceUserId: widget.profile.userId,
+                            presenceBackgroundColor: headerColor,
+                            showOfflinePresenceDot: true,
+                            showPresenceTooltip: true,
+                            onTap: avatar != null
+                                ? () => showDialog(
+                                    context: context,
+                                    builder: (_) => MxcImageViewer(avatar),
+                                  )
+                                : null,
+                          ),
+                          SizedBox(height: 14 * scale),
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 14 * scale,
+                              vertical: 9 * scale,
+                            ),
+                            decoration: BoxDecoration(
+                              color: pillBackground,
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: namePillStyle.border,
+                                width: 1.1,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: GradientDisplayName(
+                                    userId: widget.profile.userId,
+                                    text: _displayname,
+                                    client: _client,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    onGradientColorsChanged:
+                                        _onDisplayNameGradientColorsChanged,
+                                    style: TextStyle(
+                                      color: namePillStyle.fallbackTextColor,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 16 * scale,
                                     ),
                                   ),
                                 ),
-                            ],
+                                if (emojiStatusUri != null) ...[
+                                  SizedBox(width: 6 * scale),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(999),
+                                    child: MxcImage(
+                                      uri: emojiStatusUri,
+                                      width: 16 * scale,
+                                      height: 16 * scale,
+                                      fit: BoxFit.cover,
+                                      isThumbnail: true,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
                           ),
-                          const Spacer(),
-                          IconButton(
-                            visualDensity: VisualDensity.compact,
-                            icon: Icon(Icons.close, color: headerOnColor),
-                            onPressed: () => Navigator.of(context).pop(),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Avatar(
-                        mxContent: avatar,
-                        name: _displayname,
-                        size: avatarSize,
-                        presenceUserId: widget.profile.userId,
-                        presenceBackgroundColor: headerColor,
-                        showOfflinePresenceDot: true,
-                        showPresenceTooltip: true,
-                        onTap: avatar != null
-                            ? () => showDialog(
-                                context: context,
-                                builder: (_) => MxcImageViewer(avatar),
-                              )
-                            : null,
-                      ),
-                      SizedBox(height: 14 * scale),
-                      Container(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 14 * scale,
-                          vertical: 9 * scale,
-                        ),
-                        decoration: BoxDecoration(
-                          color: pillBackground,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
-                            color: headerOnColor.withAlpha(112),
-                            width: 1.1,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Flexible(
-                              child: GradientDisplayName(
-                                userId: widget.profile.userId,
-                                text: _displayname,
-                                client: _client,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                          if (presenceActivityText != null)
+                            Padding(
+                              padding: EdgeInsets.only(top: 4 * scale),
+                              child: Text(
+                                presenceActivityText,
                                 style: TextStyle(
-                                  color: headerOnColor,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 16 * scale,
+                                  color: headerOnColor.withAlpha(140),
+                                  fontSize: 12 * scale,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                             ),
-                            if (emojiStatusUri != null) ...[
-                              SizedBox(width: 6 * scale),
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(999),
-                                child: MxcImage(
-                                  uri: emojiStatusUri,
-                                  width: 16 * scale,
-                                  height: 16 * scale,
-                                  fit: BoxFit.cover,
-                                  isThumbnail: true,
-                                ),
+                          if (statusText != null) ...[
+                            SizedBox(height: 10 * scale),
+                            _buildStatusPill(
+                              text: statusText,
+                              icon: Icons.circle,
+                              background: pillBackground,
+                              foreground: statusForeground,
+                            ),
+                          ],
+                          if (widget.noProfileWarning) ...[
+                            SizedBox(height: 10 * scale),
+                            _buildStatusPill(
+                              text: L10n.of(context).profileNotFound,
+                              background: warningBackground,
+                              foreground: warningForeground,
+                              icon: Icons.warning_amber_outlined,
+                            ),
+                          ],
+                          SizedBox(height: 14 * scale),
+                          Row(
+                            spacing: 10 * scale,
+                            children: [
+                              _ProfileActionButton(
+                                label: L10n.of(context).profileActionMessage,
+                                icon: Icons.chat_bubble_outline,
+                                foreground: headerOnColor,
+                                background: actionBackground,
+                                onTap: _isSelf ? null : _openMessage,
+                              ),
+                              _ProfileActionButton(
+                                label: L10n.of(context).profileActionMute,
+                                icon: Icons.notifications_off_outlined,
+                                foreground: headerOnColor,
+                                background: actionBackground,
+                                onTap: _isSelf ? null : _toggleMute,
+                              ),
+                              _ProfileActionButton(
+                                label: L10n.of(context).profileActionCall,
+                                icon: Icons.call_outlined,
+                                foreground: headerOnColor,
+                                background: actionBackground,
+                                onTap: _isSelf ? null : _callAction,
+                              ),
+                              _ProfileActionButton(
+                                label: L10n.of(context).more.toLowerCase(),
+                                icon: Icons.more_horiz,
+                                foreground: headerOnColor,
+                                background: actionBackground,
+                                onTap: _openMoreMenu,
                               ),
                             ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.all(18 * scale),
+                        child: Column(
+                          spacing: 12 * scale,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (_profileFields.featuredChannel != null)
+                              _buildFeaturedChannelSection(context),
+                            _buildBioSection(context),
+                            _buildUsernameSection(context),
                           ],
                         ),
                       ),
-                      if (presenceActivityText != null)
-                        Padding(
-                          padding: EdgeInsets.only(top: 4 * scale),
-                          child: Text(
-                            presenceActivityText,
-                            style: TextStyle(
-                              color: headerOnColor.withAlpha(140),
-                              fontSize: 12 * scale,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                      if (statusText != null) ...[
-                        SizedBox(height: 10 * scale),
-                        _buildStatusPill(
-                          text: statusText,
-                          icon: Icons.circle,
-                          background: pillBackground,
-                          foreground: headerOnColor,
-                        ),
-                      ],
-                      if (widget.noProfileWarning) ...[
-                        SizedBox(height: 10 * scale),
-                        _buildStatusPill(
-                          text: L10n.of(context).profileNotFound,
-                          background: Colors.red.withAlpha(48),
-                          foreground: headerOnColor,
-                          icon: Icons.warning_amber_outlined,
-                        ),
-                      ],
-                      SizedBox(height: 14 * scale),
-                      Row(
-                        spacing: 10 * scale,
-                        children: [
-                          _ProfileActionButton(
-                            label: L10n.of(context).profileActionMessage,
-                            icon: Icons.chat_bubble_outline,
-                            foreground: headerOnColor,
-                            background: actionBackground,
-                            onTap: _isSelf ? null : _openMessage,
-                          ),
-                          _ProfileActionButton(
-                            label: L10n.of(context).profileActionMute,
-                            icon: Icons.notifications_off_outlined,
-                            foreground: headerOnColor,
-                            background: actionBackground,
-                            onTap: _isSelf ? null : _toggleMute,
-                          ),
-                          _ProfileActionButton(
-                            label: L10n.of(context).profileActionCall,
-                            icon: Icons.call_outlined,
-                            foreground: headerOnColor,
-                            background: actionBackground,
-                            onTap: _isSelf ? null : _callAction,
-                          ),
-                          _ProfileActionButton(
-                            label: L10n.of(context).more.toLowerCase(),
-                            icon: Icons.more_horiz,
-                            foreground: headerOnColor,
-                            background: actionBackground,
-                            onTap: _openMoreMenu,
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.all(18 * scale),
-                    child: Column(
-                      spacing: 12 * scale,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (_profileFields.featuredChannel != null)
-                          _buildFeaturedChannelSection(context),
-                        _buildBioSection(context),
-                        _buildUsernameSection(context),
-                      ],
                     ),
-                  ),
+                  ],
                 ),
               ],
             ),
@@ -1032,4 +1451,30 @@ class _BackgroundColorChoice {
 
 enum _UserMoreAction { copy, share, report, block }
 
+enum _BannerAction { pickImage, remove }
+
 enum _EmojiStatusAction { pickImage, remove }
+
+class _NamePillStyle {
+  final Color background;
+  final Color border;
+  final Color fallbackTextColor;
+
+  const _NamePillStyle({
+    required this.background,
+    required this.border,
+    required this.fallbackTextColor,
+  });
+}
+
+class _NameOverlayCandidate {
+  final Color overlayColor;
+  final int alpha;
+  final double minContrast;
+
+  const _NameOverlayCandidate({
+    required this.overlayColor,
+    required this.alpha,
+    required this.minContrast,
+  });
+}

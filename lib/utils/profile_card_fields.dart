@@ -4,6 +4,7 @@ import 'package:matrix/matrix.dart';
 
 const String profileBioField = 'r.trd.bio';
 const String profileBackgroundColorField = 'r.trd.profile_bg_color';
+const String profileBannerField = 'r.trd.profile_banner_mxc';
 const String profileEmojiStatusField = 'r.trd.emoji_status_mxc';
 const String profileFeaturedChannelField = 'r.trd.featured_channel';
 
@@ -43,12 +44,14 @@ class FeaturedChannelProfileField {
 class ProfileCardFields {
   final String? bio;
   final Color? backgroundColor;
+  final Uri? bannerMxc;
   final Uri? emojiStatusMxc;
   final FeaturedChannelProfileField? featuredChannel;
 
   const ProfileCardFields({
     this.bio,
     this.backgroundColor,
+    this.bannerMxc,
     this.emojiStatusMxc,
     this.featuredChannel,
   });
@@ -96,6 +99,7 @@ Future<ProfileCardFields> loadProfileCardFields(
     userId,
     profileBackgroundColorField,
   );
+  final bannerRaw = await _loadProfileField(client, userId, profileBannerField);
   final emojiRaw = await _loadProfileField(
     client,
     userId,
@@ -110,13 +114,18 @@ Future<ProfileCardFields> loadProfileCardFields(
   return ProfileCardFields(
     bio: _readStringField(bioRaw),
     backgroundColor: _readBackgroundColorField(backgroundRaw),
+    bannerMxc: _readMxcUriField(bannerRaw),
     emojiStatusMxc: _readMxcUriField(emojiRaw),
     featuredChannel: _readFeaturedChannelField(featuredRaw),
   );
 }
 
 Future<Uri?> loadProfileEmojiStatus(Client client, String userId) async {
-  final emojiRaw = await _loadProfileField(client, userId, profileEmojiStatusField);
+  final emojiRaw = await _loadProfileField(
+    client,
+    userId,
+    profileEmojiStatusField,
+  );
   return _readMxcUriField(emojiRaw);
 }
 

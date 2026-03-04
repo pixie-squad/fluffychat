@@ -3136,6 +3136,7 @@
     "setPowerLevelDescription": "Power levels define what a member is allowed to do in this room and usually range between 0 and 100.",
     "myProfile": "My profile",
     "profileBackgroundColor": "Background color",
+    "profileBanner": "Banner",
     "profileEmojiStatus": "Emoji status",
     "profileFeaturedChannel": "Featured channel",
     "profileBio": "Bio",

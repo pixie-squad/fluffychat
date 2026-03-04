@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
 
 const String nameGradientField = 'r.trd.name_gradient';
+const String nameGradientAnimatedField = 'r.trd.name_gradient_animated';
 
 const List<List<Color>> nameGradients = [
   [Color(0xFFFF6B6B), Color(0xFFFF8E53)], // Sunset
@@ -19,21 +20,44 @@ const List<List<Color>> nameGradients = [
   [Color(0xFFee0979), Color(0xFFff6a00)], // Hot sunset
 ];
 
+/// Result returned from [showGradientPicker].
+/// [colors] is empty to signal "remove gradient", non-empty for a chosen gradient.
+class GradientPickerResult {
+  final List<Color> colors;
+  final bool animated;
+
+  const GradientPickerResult({required this.colors, this.animated = false});
+}
+
 class _GradientCache {
-  final Map<String, List<Color>?> _cache = {};
+  final Map<String, List<Color>?> _colorCache = {};
+  final Map<String, bool> _animatedCache = {};
 
-  bool has(String userId) => _cache.containsKey(userId);
+  bool has(String userId) => _colorCache.containsKey(userId);
 
-  List<Color>? getCached(String userId) => _cache[userId];
+  (List<Color>?, bool) getCached(String userId) =>
+      (_colorCache[userId], _animatedCache[userId] ?? false);
 
-  Future<List<Color>?> get(Client client, String userId) async {
-    if (_cache.containsKey(userId)) return _cache[userId];
+  Future<(List<Color>?, bool)> get(Client client, String userId) async {
+    if (_colorCache.containsKey(userId)) {
+      return (_colorCache[userId], _animatedCache[userId] ?? false);
+    }
     try {
       final data = await client.getProfileField(userId, nameGradientField);
       final raw = data[nameGradientField];
       List<Color>? colors;
-      if (raw is List) {
+      var animated = false;
+      if (raw is Map) {
+        // New format: {'c': [argb,...], 'a': true}
+        final c = raw['c'];
+        if (c is List) {
+          colors = c.map((v) => Color((v as num).toInt())).toList();
+        }
+        animated = raw['a'] == true;
+      } else if (raw is List) {
         colors = raw.map((v) => Color((v as num).toInt())).toList();
+        // Fallback: check separate key (servers that preserve extra keys)
+        animated = data[nameGradientAnimatedField] == true;
       } else if (raw is num) {
         // Legacy preset index
         final idx = raw.toInt();
@@ -41,18 +65,41 @@ class _GradientCache {
           colors = nameGradients[idx];
         }
       }
-      _cache[userId] = colors;
-      return colors;
+      _colorCache[userId] = colors;
+      _animatedCache[userId] = animated;
+      return (colors, animated);
     } catch (_) {
-      _cache[userId] = null;
-      return null;
+      _colorCache[userId] = null;
+      _animatedCache[userId] = false;
+      return (null, false);
     }
   }
 
-  void invalidate(String userId) => _cache.remove(userId);
+  void invalidate(String userId) {
+    _colorCache.remove(userId);
+    _animatedCache.remove(userId);
+  }
 }
 
 final gradientCache = _GradientCache();
+
+/// Builds a [LinearGradient] that scrolls continuously for animation.
+///
+/// Creates a seamless loop by appending the first color, then shifts the
+/// gradient via [begin]/[end] alignment using [TileMode.repeated].
+/// [t] is the animation value from 0.0 to 1.0 (one full cycle).
+LinearGradient _scrollingGradient(List<Color> colors, double t) {
+  final loop = [...colors, colors.first];
+  // Pattern width in alignment units (widget spans 2.0 from -1 to 1).
+  final pw = 2.0 * (loop.length - 1) / (colors.length - 1);
+  final offset = t * pw;
+  return LinearGradient(
+    colors: loop,
+    begin: Alignment(-1.0 + offset, 0),
+    end: Alignment(-1.0 + pw + offset, 0),
+    tileMode: TileMode.repeated,
+  );
+}
 
 class GradientDisplayName extends StatefulWidget {
   final String userId;
@@ -61,6 +108,7 @@ class GradientDisplayName extends StatefulWidget {
   final int? maxLines;
   final TextOverflow? overflow;
   final Client client;
+  final ValueChanged<List<Color>?>? onGradientColorsChanged;
 
   const GradientDisplayName({
     required this.userId,
@@ -69,6 +117,7 @@ class GradientDisplayName extends StatefulWidget {
     this.style,
     this.maxLines,
     this.overflow,
+    this.onGradientColorsChanged,
     super.key,
   });
 
@@ -76,29 +125,79 @@ class GradientDisplayName extends StatefulWidget {
   State<GradientDisplayName> createState() => _GradientDisplayNameState();
 }
 
-class _GradientDisplayNameState extends State<GradientDisplayName> {
+class _GradientDisplayNameState extends State<GradientDisplayName>
+    with SingleTickerProviderStateMixin {
   List<Color>? _colors;
+  bool _animated = false;
+  late final AnimationController _controller;
 
   @override
   void initState() {
     super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 4000),
+    );
     _load();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
   @override
   void didUpdateWidget(GradientDisplayName old) {
     super.didUpdateWidget(old);
-    if (old.userId != widget.userId) _load();
+    if (old.userId != widget.userId) {
+      _load();
+    } else if (old.onGradientColorsChanged != widget.onGradientColorsChanged) {
+      _notifyGradientColorsChanged(_colors);
+    }
+  }
+
+  void _updateAnimation() {
+    final shouldAnimate =
+        _animated && _colors != null && (_colors?.length ?? 0) >= 2;
+    if (shouldAnimate && !_controller.isAnimating) {
+      _controller.repeat();
+    } else if (!shouldAnimate && _controller.isAnimating) {
+      _controller.stop();
+    }
   }
 
   void _load() {
     if (gradientCache.has(widget.userId)) {
-      _colors = gradientCache.getCached(widget.userId);
+      final (colors, animated) = gradientCache.getCached(widget.userId);
+      _colors = colors;
+      _animated = animated;
+      _updateAnimation();
+      _notifyGradientColorsChanged(colors);
     } else {
-      gradientCache.get(widget.client, widget.userId).then((colors) {
-        if (mounted) setState(() => _colors = colors);
+      gradientCache.get(widget.client, widget.userId).then((result) {
+        if (!mounted) return;
+        final (colors, animated) = result;
+        setState(() {
+          _colors = colors;
+          _animated = animated;
+        });
+        _updateAnimation();
+        _notifyGradientColorsChanged(colors);
       });
     }
+  }
+
+  void _notifyGradientColorsChanged(List<Color>? colors) {
+    final callback = widget.onGradientColorsChanged;
+    if (callback == null) return;
+    final value = colors == null || colors.length < 2
+        ? null
+        : List<Color>.unmodifiable(colors);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || widget.onGradientColorsChanged != callback) return;
+      callback(value);
+    });
   }
 
   @override
@@ -111,18 +210,36 @@ class _GradientDisplayNameState extends State<GradientDisplayName> {
     );
     final colors = _colors;
     if (colors == null || colors.length < 2) return text;
-    return ShaderMask(
-      blendMode: BlendMode.srcIn,
-      shaderCallback: (bounds) =>
-          LinearGradient(colors: colors).createShader(bounds),
+
+    if (!_animated) {
+      return ShaderMask(
+        blendMode: BlendMode.srcIn,
+        shaderCallback: (bounds) =>
+            LinearGradient(colors: colors).createShader(bounds),
+        child: text,
+      );
+    }
+
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return ShaderMask(
+          blendMode: BlendMode.srcIn,
+          shaderCallback: (bounds) =>
+              _scrollingGradient(colors, _controller.value)
+                  .createShader(bounds),
+          child: child,
+        );
+      },
       child: text,
     );
   }
 }
 
-/// Returns `null` if dismissed, empty list to clear, or a list of colors.
-Future<List<Color>?> showGradientPicker(BuildContext context) {
-  return showDialog<List<Color>>(
+/// Returns `null` if dismissed, a [GradientPickerResult] with empty [colors] to
+/// clear, or a [GradientPickerResult] with the chosen colors (and animated flag).
+Future<GradientPickerResult?> showGradientPicker(BuildContext context) {
+  return showDialog<GradientPickerResult>(
     context: context,
     builder: (context) => const _GradientPickerDialog(),
   );
@@ -137,8 +254,9 @@ class _GradientPickerDialog extends StatefulWidget {
 
 class _GradientPickerDialogState extends State<_GradientPickerDialog> {
   bool _customMode = false;
-  List<Color> _colors = [const Color(0xFFFF1744), const Color(0xFF448AFF)];
+  final List<Color> _colors = [const Color(0xFFFF1744), const Color(0xFF448AFF)];
   int _selectedStop = 0;
+  bool _animated = false;
 
   static const _palette = [
     Color(0xFFFF1744),
@@ -168,36 +286,73 @@ class _GradientPickerDialogState extends State<_GradientPickerDialog> {
     return _customMode ? _buildCustom() : _buildPresets();
   }
 
-  Widget _buildPresets() => AlertDialog(
-        title: const Text('Name gradient'), // TODO: l10n
-        content: Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            ActionChip(
-              label: const Text('None'),
-              onPressed: () => Navigator.pop(context, <Color>[]),
-            ),
-            ActionChip(
-              label: const Text('Custom'),
-              onPressed: () => setState(() => _customMode = true),
-            ),
-            for (var i = 0; i < nameGradients.length; i++)
-              InkWell(
-                onTap: () => Navigator.pop(context, nameGradients[i]),
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  width: 48,
-                  height: 32,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    gradient: LinearGradient(colors: nameGradients[i]),
-                  ),
+  Widget _buildAnimatedSwitch() => SwitchListTile.adaptive(
+        dense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+        title: const Text('Animate'), // TODO: l10n
+        value: _animated,
+        onChanged: (v) => setState(() => _animated = v),
+      );
+
+  Widget _buildPresets() {
+    final presetColors = _colors;
+    return AlertDialog(
+      title: const Text('Name gradient'), // TODO: l10n
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ActionChip(
+                label: const Text('None'),
+                onPressed: () => Navigator.pop(
+                  context,
+                  const GradientPickerResult(colors: []),
                 ),
               ),
-          ],
-        ),
-      );
+              ActionChip(
+                label: const Text('Custom'),
+                onPressed: () => setState(() => _customMode = true),
+              ),
+              for (var i = 0; i < nameGradients.length; i++)
+                InkWell(
+                  onTap: () => Navigator.pop(
+                    context,
+                    GradientPickerResult(
+                      colors: nameGradients[i],
+                      animated: _animated,
+                    ),
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    width: 48,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      gradient: LinearGradient(colors: nameGradients[i]),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _buildAnimatedPreview(presetColors),
+          _buildAnimatedSwitch(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAnimatedPreview(List<Color> colors) {
+    if (!_animated || colors.length < 2) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: _AnimatedGradientPreview(colors: colors),
+    );
+  }
 
   Widget _buildCustom() {
     final theme = Theme.of(context);
@@ -214,13 +369,15 @@ class _GradientPickerDialogState extends State<_GradientPickerDialog> {
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            height: 32,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              gradient: LinearGradient(colors: _colors),
-            ),
-          ),
+          _animated
+              ? _AnimatedGradientPreview(colors: _colors)
+              : Container(
+                  height: 32,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    gradient: LinearGradient(colors: _colors),
+                  ),
+                ),
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -264,7 +421,9 @@ class _GradientPickerDialogState extends State<_GradientPickerDialog> {
                 ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
+          _buildAnimatedSwitch(),
+          const SizedBox(height: 8),
           Wrap(
             spacing: 4,
             runSpacing: 4,
@@ -293,11 +452,65 @@ class _GradientPickerDialogState extends State<_GradientPickerDialog> {
           child: Text(MaterialLocalizations.of(context).cancelButtonLabel),
         ),
         TextButton(
-          onPressed: () =>
-              Navigator.pop(context, List<Color>.from(_colors)),
+          onPressed: () => Navigator.pop(
+            context,
+            GradientPickerResult(
+              colors: List<Color>.from(_colors),
+              animated: _animated,
+            ),
+          ),
           child: Text(MaterialLocalizations.of(context).okButtonLabel),
         ),
       ],
     );
   }
 }
+
+/// Small animated gradient preview strip shown in the picker when animate is on.
+class _AnimatedGradientPreview extends StatefulWidget {
+  final List<Color> colors;
+
+  const _AnimatedGradientPreview({required this.colors});
+
+
+  @override
+  State<_AnimatedGradientPreview> createState() =>
+      _AnimatedGradientPreviewState();
+}
+
+class _AnimatedGradientPreviewState extends State<_AnimatedGradientPreview>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 4000),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        return Container(
+          height: 32,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            gradient: _scrollingGradient(widget.colors, _controller.value),
+          ),
+        );
+      },
+    );
+  }
+}
+

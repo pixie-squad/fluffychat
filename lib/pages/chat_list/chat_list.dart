@@ -741,14 +741,26 @@ class ChatListController extends State<ChatList>
     final picked = await showGradientPicker(context);
     if (picked == null) return;
     if (!mounted) return;
-    final value =
-        picked.isEmpty ? null : picked.map((c) => c.toARGB32()).toList();
+    final colors = picked.colors.isEmpty
+        ? null
+        : picked.colors.map((c) => c.toARGB32()).toList();
+    // Embed animated flag inside the value so servers that strip extra
+    // keys from the profile-field body still preserve it.
+    final value = colors == null
+        ? null
+        : picked.animated
+            ? {'c': colors, 'a': true}
+            : colors;
     await showFutureLoadingDialog(
       context: context,
       future: () => client.setProfileField(
         client.userID!,
         nameGradientField,
-        {nameGradientField: value},
+        {
+          nameGradientField: value,
+          if (value != null && picked.animated)
+            nameGradientAnimatedField: true,
+        },
       ),
     );
     gradientCache.invalidate(client.userID!);
