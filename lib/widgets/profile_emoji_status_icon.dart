@@ -41,6 +41,21 @@ class _ProfileEmojiStatusIconState extends State<ProfileEmojiStatusIcon> {
   void initState() {
     super.initState();
     _future = profileEmojiStatusCache.get(widget.client, widget.userId);
+    profileEmojiStatusCache.version.addListener(_onCacheInvalidated);
+  }
+
+  @override
+  void dispose() {
+    profileEmojiStatusCache.version.removeListener(_onCacheInvalidated);
+    super.dispose();
+  }
+
+  void _onCacheInvalidated() {
+    if (!profileEmojiStatusCache.has(widget.userId)) {
+      setState(() {
+        _future = profileEmojiStatusCache.get(widget.client, widget.userId);
+      });
+    }
   }
 
   @override
@@ -73,11 +88,12 @@ class _ProfileEmojiStatusIconState extends State<ProfileEmojiStatusIcon> {
               : ClipRRect(
                   borderRadius: borderRadius,
                   child: MxcImage(
+                    key: ValueKey(emojiUri),
                     uri: emojiUri,
                     width: widget.size,
                     height: widget.size,
                     fit: BoxFit.cover,
-                    isThumbnail: true,
+                    isThumbnail: false,
                   ),
                 ),
         );

@@ -10,6 +10,7 @@ import 'package:matrix/matrix.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/new_group/new_group_view.dart';
 import 'package:fluffychat/utils/file_selector.dart';
+import 'package:fluffychat/widgets/image_crop_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 
 class NewGroup extends StatefulWidget {
@@ -58,11 +59,18 @@ class NewGroupController extends State<NewGroup> {
       type: FileType.image,
       allowMultiple: false,
     );
-    final bytes = await photo.singleOrNull?.readAsBytes();
+    final rawBytes = await photo.singleOrNull?.readAsBytes();
+    if (rawBytes == null || !mounted) return;
+
+    final croppedBytes = await showImageCropDialog(
+      context: context,
+      imageBytes: rawBytes,
+    );
+    if (croppedBytes == null) return;
 
     setState(() {
       avatarUrl = null;
-      avatar = bytes;
+      avatar = croppedBytes;
     });
   }
 

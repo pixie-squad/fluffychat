@@ -3,8 +3,11 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:matrix/matrix.dart';
 import 'package:swipe_to_action/swipe_to_action.dart';
+
+import 'package:fluffychat/utils/url_launcher.dart';
 
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
@@ -178,8 +181,13 @@ class Message extends StatelessWidget {
           ? hardCorner
           : roundedCorner,
     );
+    final albumCaption = albumEvents
+        ?.where((e) => e.fileDescription != null)
+        .lastOrNull
+        ?.fileDescription;
+
     final noBubble =
-        albumEvents != null ||
+        (albumEvents != null && albumCaption == null) ||
         ({
               MessageTypes.Video,
               MessageTypes.Image,
@@ -655,12 +663,78 @@ class Message extends StatelessWidget {
                                                                 },
                                                           ),
                                                         if (albumEvents != null)
-                                                          MediaAlbum(
-                                                            events:
-                                                                albumEvents!,
-                                                            timeline: timeline,
-                                                            borderRadius:
-                                                                borderRadius,
+                                                          Column(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment
+                                                                    .start,
+                                                            children: [
+                                                              MediaAlbum(
+                                                                events:
+                                                                    albumEvents!,
+                                                                timeline:
+                                                                    timeline,
+                                                                borderRadius: albumCaption !=
+                                                                        null
+                                                                    ? borderRadius
+                                                                        .copyWith(
+                                                                          bottomLeft:
+                                                                              Radius.zero,
+                                                                          bottomRight:
+                                                                              Radius.zero,
+                                                                        )
+                                                                    : borderRadius,
+                                                              ),
+                                                              if (albumCaption !=
+                                                                  null)
+                                                                Padding(
+                                                                  padding: const EdgeInsets
+                                                                      .symmetric(
+                                                                    horizontal:
+                                                                        16,
+                                                                    vertical: 8,
+                                                                  ),
+                                                                  child:
+                                                                      Linkify(
+                                                                    text:
+                                                                        albumCaption,
+                                                                    textScaleFactor:
+                                                                        MediaQuery.textScalerOf(context)
+                                                                            .scale(
+                                                                              1,
+                                                                            ),
+                                                                    style:
+                                                                        TextStyle(
+                                                                      color:
+                                                                          textColor,
+                                                                      fontSize:
+                                                                          AppSettings.fontSizeFactor.value *
+                                                                          AppConfig.messageFontSize,
+                                                                    ),
+                                                                    options:
+                                                                        const LinkifyOptions(
+                                                                      humanize:
+                                                                          false,
+                                                                    ),
+                                                                    linkStyle:
+                                                                        TextStyle(
+                                                                      color:
+                                                                          linkColor,
+                                                                      decoration:
+                                                                          TextDecoration.underline,
+                                                                      decorationColor:
+                                                                          linkColor,
+                                                                    ),
+                                                                    onOpen: (url) =>
+                                                                        UrlLauncher(
+                                                                          context,
+                                                                          url.url,
+                                                                        ).launchUrl(),
+                                                                  ),
+                                                                ),
+                                                            ],
                                                           )
                                                         else
                                                           MessageContent(

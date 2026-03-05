@@ -23,7 +23,7 @@ class FeaturedChannelProfileField {
 
   factory FeaturedChannelProfileField.fromJson(Map<Object?, Object?> json) {
     final roomId = json['room_id'];
-    if (roomId is! String || roomId.isEmpty) {
+    if (roomId is! String || roomId.trim().isEmpty) {
       throw const FormatException('Invalid featured channel room id');
     }
 
@@ -33,12 +33,49 @@ class FeaturedChannelProfileField {
     final avatar = avatarRaw is String ? Uri.tryParse(avatarRaw) : null;
 
     return FeaturedChannelProfileField(
-      roomId: roomId,
+      roomId: roomId.trim(),
       title: title is String ? title : null,
       subtitle: subtitle is String ? subtitle : null,
       avatarUrl: avatar?.scheme == 'mxc' ? avatar : null,
     );
   }
+
+  Map<String, Object?> toJson() => {
+    'room_id': roomId,
+    if (title != null && title!.trim().isNotEmpty) 'title': title!.trim(),
+    if (subtitle != null && subtitle!.trim().isNotEmpty)
+      'subtitle': subtitle!.trim(),
+    if (avatarUrl?.scheme == 'mxc') 'avatar_url': avatarUrl.toString(),
+  };
+}
+
+String? normalizeFeaturedChannelIdentifier(String input) {
+  var value = input.trim();
+  if (value.isEmpty) return null;
+
+  final parsed = Uri.tryParse(value);
+  final isMatrixTo =
+      parsed != null &&
+      (parsed.scheme == 'http' || parsed.scheme == 'https') &&
+      parsed.host.toLowerCase() == 'matrix.to';
+  if (isMatrixTo) {
+    var fragment = parsed.fragment;
+    if (fragment.isEmpty) return null;
+    fragment = Uri.decodeComponent(fragment);
+    if (fragment.startsWith('/')) {
+      fragment = fragment.substring(1);
+    }
+    final queryStart = fragment.indexOf('?');
+    if (queryStart > -1) {
+      fragment = fragment.substring(0, queryStart);
+    }
+    value = fragment.trim();
+  }
+
+  if (!value.isValidMatrixId || !{'#', '!'}.contains(value.sigil)) {
+    return null;
+  }
+  return value;
 }
 
 class ProfileCardFields {
@@ -60,6 +97,7 @@ class ProfileCardFields {
 class _ProfileEmojiStatusCache {
   final Map<String, Uri?> _cache = {};
   final Map<String, Future<Uri?>> _inFlight = {};
+  final ValueNotifier<int> version = ValueNotifier<int>(0);
 
   bool has(String userId) => _cache.containsKey(userId);
 
@@ -84,6 +122,7 @@ class _ProfileEmojiStatusCache {
   void invalidate(String userId) {
     _cache.remove(userId);
     _inFlight.remove(userId);
+    version.value++;
   }
 }
 

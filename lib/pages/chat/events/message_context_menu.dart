@@ -192,6 +192,14 @@ class _QuickReactionsEntryState extends State<_QuickReactionsEntry> {
   @override
   Widget build(BuildContext context) {
     final reactions = widget.quickReactions.take(6).toList(growable: false);
+    final compactIconButtonStyle = IconButton.styleFrom(
+      padding: EdgeInsets.zero,
+      minimumSize: const Size.square(36),
+      fixedSize: const Size.square(36),
+      maximumSize: const Size.square(36),
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
@@ -202,12 +210,7 @@ class _QuickReactionsEntryState extends State<_QuickReactionsEntry> {
           children: [
             ...reactions.map(
               (reaction) => IconButton(
-                constraints: const BoxConstraints.tightFor(
-                  width: 36,
-                  height: 36,
-                ),
-                padding: EdgeInsets.zero,
-                visualDensity: VisualDensity.compact,
+                style: compactIconButtonStyle,
                 onPressed: widget.sentReactions.contains(reaction)
                     ? null
                     : () => Navigator.of(
@@ -224,9 +227,7 @@ class _QuickReactionsEntryState extends State<_QuickReactionsEntry> {
               ),
             ),
             IconButton(
-              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-              padding: EdgeInsets.zero,
-              visualDensity: VisualDensity.compact,
+              style: compactIconButtonStyle,
               icon: const Icon(Icons.keyboard_arrow_down_outlined),
               tooltip: widget.customReactionTooltip,
               onPressed: () => Navigator.of(

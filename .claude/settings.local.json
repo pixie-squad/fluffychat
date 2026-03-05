@@ -4,7 +4,13 @@
       "Bash(grep -n \"RawKeyboardListener\\\\|KeyboardListener\\\\|LogicalKeyboardKey\\\\|Control.v\\\\|Cmd.v\\\\|paste\\\\|onKey\" /c/Users/Melted/Desktop/fluffychat/lib/pages/chat/*.dart)",
       "Bash(xargs grep -l \"sendFileEvent\")",
       "Bash(xargs wc -l)",
-      "Bash(xargs grep -l \"class Event\")"
+      "Bash(xargs grep -l \"class Event\")",
+      "Bash(flutter analyze lib/pages/chat/drag_select_overlay.dart lib/pages/chat/chat_event_list.dart lib/pages/chat/chat_view.dart lib/pages/chat/chat.dart)",
+      "Bash(xargs grep -l \"Image\\\\.file\\\\|XFile\\\\|File.*image\")",
+      "Bash(xargs grep -l \"profile.*avatar\\\\|avatar.*profile\")",
+      "Bash(xargs grep -l \"CircleAvatar\\\\|ClipOval\\\\|circular\\\\|overlay\")",
+      "Bash(flutter*)",
+      "Bash(dart*)"
     ]
   }
 }

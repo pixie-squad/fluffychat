@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:mime/mime.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:pasteboard/pasteboard.dart';
@@ -31,7 +33,9 @@ import 'package:fluffychat/utils/file_selector.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:fluffychat/utils/other_party_can_receive.dart';
+import 'package:fluffychat/utils/resize_video.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/utils/show_scaffold_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
@@ -132,17 +136,7 @@ class ChatController extends State<ChatPageWithRoom>
   Future<void> onDragDone(DropDoneDetails details) async {
     setState(() => dragging = false);
     if (details.files.isEmpty) return;
-
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: details.files,
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
-    );
+    addPendingMedia(details.files);
   }
 
   bool get canSaveSelectedEvent =>
@@ -159,6 +153,36 @@ class ChatController extends State<ChatPageWithRoom>
       selectedEvents.single.saveFile(context);
 
   List<Event> selectedEvents = [];
+
+  // Drag-select support
+  final Map<String, GlobalKey> messageKeys = {};
+
+  void registerMessageKey(String eventId, GlobalKey key) {
+    messageKeys[eventId] = key;
+  }
+
+  void unregisterMessageKey(String eventId) {
+    messageKeys.remove(eventId);
+  }
+
+  String? hitTestEventAt(double globalY) {
+    for (final entry in messageKeys.entries) {
+      final renderObj = entry.value.currentContext?.findRenderObject();
+      if (renderObj is RenderBox && renderObj.attached) {
+        final topLeft = renderObj.localToGlobal(Offset.zero);
+        final bottom = topLeft.dy + renderObj.size.height;
+        if (globalY >= topLeft.dy && globalY <= bottom) {
+          return entry.key;
+        }
+      }
+    }
+    return null;
+  }
+
+  Event? eventById(String eventId) {
+    return timeline?.events.firstWhereOrNull((e) => e.eventId == eventId);
+  }
+
   static const String _reactionUsageStoreKey = 'chat.fluffy.reaction_usage.v1';
 
   final Set<String> unfolded = {};
@@ -179,6 +203,57 @@ class ChatController extends State<ChatPageWithRoom>
   String pendingText = '';
 
   bool showEmojiPicker = false;
+
+  /// Media files pending to be sent inline with the next message.
+  List<XFile> pendingMediaFiles = [];
+
+  bool _allFilesAreMedia(List<XFile> files) {
+    return files.every((file) {
+      final mimeType = file.mimeType ?? lookupMimeType(file.name);
+      return mimeType != null &&
+          (mimeType.startsWith('image') || mimeType.startsWith('video'));
+    });
+  }
+
+  void addPendingMedia(List<XFile> files) {
+    if (files.isEmpty) return;
+    if (!_allFilesAreMedia(files)) {
+      _showSendFileDialog(files);
+      return;
+    }
+    // Cancel edit mode when adding media (can't edit with attachments)
+    if (editEvent != null) {
+      cancelReplyEventAction();
+    }
+    setState(() {
+      pendingMediaFiles = [...pendingMediaFiles, ...files];
+    });
+  }
+
+  void removePendingMedia(int index) {
+    setState(() {
+      pendingMediaFiles = List.of(pendingMediaFiles)..removeAt(index);
+    });
+  }
+
+  void clearPendingMedia() {
+    setState(() {
+      pendingMediaFiles = [];
+    });
+  }
+
+  void _showSendFileDialog(List<XFile> files) {
+    showAdaptiveDialog(
+      context: context,
+      builder: (c) => SendFileDialog(
+        files: files,
+        room: room,
+        outerContext: context,
+        threadRootEventId: activeThreadId,
+        threadLastEventId: threadLastEventId,
+      ),
+    );
+  }
 
   Map<String, int> _readReactionUsage() {
     final raw = AppSettings.store.getString(_reactionUsageStoreKey);
@@ -333,16 +408,7 @@ class ChatController extends State<ChatPageWithRoom>
         .map((item) => item.value)
         .toList();
     if (files.isEmpty) return;
-    showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: files,
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
-    );
+    addPendingMedia(files);
   }
 
   bool _isPasting = false;
@@ -653,10 +719,24 @@ class ChatController extends State<ChatPageWithRoom>
   });
 
   Future<void> send() async {
-    if (sendController.text.trim().isEmpty) return;
+    final hasText = sendController.text.trim().isNotEmpty;
+    final hasMedia = pendingMediaFiles.isNotEmpty;
+
+    if (!hasText && !hasMedia) return;
+
     _storeInputTimeoutTimer?.cancel();
     final prefs = Matrix.of(context).store;
     prefs.remove('draft_$roomId');
+
+    if (!hasMedia) {
+      await _sendTextOnly();
+      return;
+    }
+
+    await _sendMediaFiles();
+  }
+
+  Future<void> _sendTextOnly() async {
     var parseCommands = true;
 
     final commandMatch = RegExp(r'^\/(\w+)').firstMatch(sendController.text);
@@ -682,11 +762,173 @@ class ChatController extends State<ChatPageWithRoom>
       parseCommands: parseCommands,
       threadRootEventId: activeThreadId,
     );
+    _resetInputState();
+  }
+
+  static const int _maxAlbumSize = 10;
+  static const int _minSizeToCompress = 20 * 1000;
+
+  static String _generateAlbumId() {
+    final random = Random();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final suffix = random.nextInt(1 << 32).toRadixString(36);
+    return '$timestamp-$suffix';
+  }
+
+  Future<void> _sendMediaFiles() async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final l10n = L10n.of(context);
+    final captionText = sendController.text.trim();
+    final files = List<XFile>.of(pendingMediaFiles);
+    final reply = replyEvent;
+    final compress = AppSettings.compressMedia.value;
+    final groupAlbum = AppSettings.groupAsAlbum.value;
+
+    // Clear state immediately so user sees input reset
+    _resetInputState();
+    setState(() => pendingMediaFiles = []);
+
+    try {
+      if (!room.otherPartyCanReceiveMessages) {
+        throw OtherPartyCanNotReceiveMessages();
+      }
+      scaffoldMessenger.showLoadingSnackBar(l10n.prepareSendingAttachment);
+      final clientConfig = await room.client.getConfig();
+      final maxUploadSize = clientConfig.mUploadSize ?? 100 * 1000 * 1000;
+
+      final allMedia = files.every((file) {
+        final mimeType = file.mimeType ?? lookupMimeType(file.name);
+        return mimeType != null &&
+            (mimeType.startsWith('image') || mimeType.startsWith('video'));
+      });
+      final useAlbum = files.length > 1 && allMedia && groupAlbum;
+      final albumIds = <int, String>{};
+      if (useAlbum) {
+        for (var i = 0; i < files.length; i++) {
+          final chunkIndex = i ~/ _maxAlbumSize;
+          albumIds.putIfAbsent(chunkIndex, _generateAlbumId);
+        }
+      }
+
+      for (var fileIndex = 0; fileIndex < files.length; fileIndex++) {
+        final xfile = files[fileIndex];
+        final MatrixFile file;
+        MatrixImageFile? thumbnail;
+        final length = await xfile.length();
+        final mimeType = xfile.mimeType ?? lookupMimeType(xfile.path);
+
+        // Generate video thumbnail
+        if (PlatformInfos.isMobile &&
+            mimeType != null &&
+            mimeType.startsWith('video')) {
+          scaffoldMessenger.showLoadingSnackBar(l10n.generatingVideoThumbnail);
+          thumbnail = await xfile.getVideoThumbnail();
+        }
+
+        // Video compression
+        if (PlatformInfos.isMobile &&
+            mimeType != null &&
+            mimeType.startsWith('video')) {
+          scaffoldMessenger.showLoadingSnackBar(l10n.compressVideo);
+          file = await xfile.getVideoInfo(
+            compress: length > _minSizeToCompress && compress,
+          );
+        } else {
+          if (length > maxUploadSize) {
+            throw FileTooBigMatrixException(length, maxUploadSize);
+          }
+          file = MatrixFile(
+            bytes: await xfile.readAsBytes(),
+            name: xfile.name,
+            mimeType: mimeType,
+          ).detectFileType;
+        }
+
+        if (file.bytes.length > maxUploadSize) {
+          throw FileTooBigMatrixException(length, maxUploadSize);
+        }
+
+        if (files.length > 1) {
+          scaffoldMessenger.showLoadingSnackBar(
+            l10n.sendingAttachmentCountOfCount(fileIndex + 1, files.length),
+          );
+        }
+
+        final extraContent = <String, Object?>{};
+
+        // Caption: assign to the last file in the batch
+        if (captionText.isNotEmpty && fileIndex == files.length - 1) {
+          extraContent['body'] = captionText;
+        }
+
+        if (useAlbum) {
+          final chunkIndex = fileIndex ~/ _maxAlbumSize;
+          extraContent['r.trd.album_id'] = albumIds[chunkIndex];
+        }
+
+        try {
+          await room.sendFileEvent(
+            file,
+            thumbnail: thumbnail,
+            shrinkImageMaxDimension: compress ? 1600 : null,
+            extraContent: extraContent.isEmpty ? null : extraContent,
+            inReplyTo: fileIndex == 0 ? reply : null,
+            threadRootEventId: activeThreadId,
+            threadLastEventId: threadLastEventId,
+          );
+        } on MatrixException catch (e) {
+          final retryAfterMs = e.retryAfterMs;
+          if (e.error != MatrixError.M_LIMIT_EXCEEDED ||
+              retryAfterMs == null) {
+            rethrow;
+          }
+          final retryAfterDuration = Duration(
+            milliseconds: retryAfterMs + 1000,
+          );
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                l10n.serverLimitReached(retryAfterDuration.inSeconds),
+              ),
+            ),
+          );
+          await Future.delayed(retryAfterDuration);
+          scaffoldMessenger.showLoadingSnackBar(l10n.sendingAttachment);
+          await room.sendFileEvent(
+            file,
+            thumbnail: thumbnail,
+            shrinkImageMaxDimension: compress ? 1600 : null,
+            extraContent: extraContent.isEmpty ? null : extraContent,
+            inReplyTo: fileIndex == 0 ? reply : null,
+            threadRootEventId: activeThreadId,
+            threadLastEventId: threadLastEventId,
+          );
+        }
+      }
+      scaffoldMessenger.clearSnackBars();
+    } catch (e) {
+      scaffoldMessenger.clearSnackBars();
+      final theme = Theme.of(context);
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          backgroundColor: theme.colorScheme.errorContainer,
+          closeIconColor: theme.colorScheme.onErrorContainer,
+          content: Text(
+            e.toLocalizedString(context),
+            style: TextStyle(color: theme.colorScheme.onErrorContainer),
+          ),
+          duration: const Duration(seconds: 30),
+          showCloseIcon: true,
+        ),
+      );
+    }
+  }
+
+  void _resetInputState() {
     sendController.value = TextEditingValue(
       text: pendingText,
       selection: const TextSelection.collapsed(offset: 0),
     );
-
     setState(() {
       sendController.text = pendingText;
       _inputTextIsEmpty = pendingText.isEmpty;
@@ -699,37 +941,19 @@ class ChatController extends State<ChatPageWithRoom>
   Future<void> sendFileAction({FileType type = FileType.any}) async {
     final files = await selectFiles(context, allowMultiple: true, type: type);
     if (files.isEmpty) return;
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: files,
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
-    );
+    addPendingMedia(files);
   }
 
   Future<void> sendImageFromClipBoard(Uint8List? image) async {
     if (image == null) return;
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: [
-          XFile.fromData(
-            image,
-            name: 'clipboard-image.png',
-            path: 'clipboard-image.png',
-            mimeType: 'image/png',
-          ),
-        ],
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
+    addPendingMedia([
+      XFile.fromData(
+        image,
+        name: 'clipboard-image.png',
+        path: 'clipboard-image.png',
+        mimeType: 'image/png',
       ),
-    );
+    ]);
   }
 
   Future<void> openCameraAction() async {
@@ -737,17 +961,7 @@ class ChatController extends State<ChatPageWithRoom>
     FocusScope.of(context).requestFocus(FocusNode());
     final file = await ImagePicker().pickImage(source: ImageSource.camera);
     if (file == null) return;
-
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: [file],
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
-    );
+    addPendingMedia([file]);
   }
 
   Future<void> openVideoCameraAction() async {
@@ -758,17 +972,7 @@ class ChatController extends State<ChatPageWithRoom>
       maxDuration: const Duration(minutes: 1),
     );
     if (file == null) return;
-
-    await showAdaptiveDialog(
-      context: context,
-      builder: (c) => SendFileDialog(
-        files: [file],
-        room: room,
-        outerContext: context,
-        threadRootEventId: activeThreadId,
-        threadLastEventId: threadLastEventId,
-      ),
-    );
+    addPendingMedia([file]);
   }
 
   Future<void> onVoiceMessageSend(

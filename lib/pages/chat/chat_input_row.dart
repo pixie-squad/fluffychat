@@ -45,10 +45,11 @@ class ChatInputRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final textMessageOnly =
+    final hasInputContent =
         controller.sendController.text.isNotEmpty ||
         controller.replyEvent != null ||
-        controller.editEvent != null;
+        controller.editEvent != null ||
+        controller.pendingMediaFiles.isNotEmpty;
 
     if (!controller.room.otherPartyCanReceiveMessages) {
       return Center(
@@ -151,7 +152,7 @@ class ChatInputRow extends StatelessWidget {
                   AnimatedContainer(
                     duration: FluffyThemes.animationDuration,
                     curve: FluffyThemes.animationCurve,
-                    width: textMessageOnly ? 0 : 48,
+                    width: hasInputContent ? 0 : 48,
                     height: height,
                     alignment: Alignment.center,
                     decoration: const BoxDecoration(),
@@ -242,7 +243,7 @@ class ChatInputRow extends StatelessWidget {
                     AnimatedContainer(
                       duration: FluffyThemes.animationDuration,
                       curve: FluffyThemes.animationCurve,
-                      width: textMessageOnly ? 0 : 48,
+                      width: hasInputContent ? 0 : 48,
                       height: height,
                       alignment: Alignment.center,
                       decoration: const BoxDecoration(),
@@ -368,8 +369,9 @@ class ChatInputRow extends StatelessWidget {
                     alignment: Alignment.center,
                     child:
                         PlatformInfos.platformCanRecord &&
-                            !controller.sendController.text.isNotEmpty &&
-                            controller.editEvent == null
+                            controller.sendController.text.isEmpty &&
+                            controller.editEvent == null &&
+                            controller.pendingMediaFiles.isEmpty
                         ? HoverBuilder(
                             builder: (context, hovered) => IconButton(
                               tooltip: L10n.of(context).voiceMessage,

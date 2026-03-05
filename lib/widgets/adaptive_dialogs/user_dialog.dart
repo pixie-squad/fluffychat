@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show OverflowBoxFit;
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -24,11 +25,13 @@ import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
+import 'package:fluffychat/widgets/emoji_status_sticker_picker.dart';
 import 'package:fluffychat/widgets/presence_builder.dart';
 
 import '../../utils/url_launcher.dart';
 import '../future_loading_dialog.dart';
 import '../matrix.dart';
+import '../image_crop_dialog.dart';
 import '../mxc_image_viewer.dart';
 
 enum UserDialogMode { view, edit }
@@ -281,6 +284,214 @@ class _UserDialogState extends State<UserDialog> {
     await _reloadProfileFields();
   }
 
+  Room? _resolveFeaturedChannelRoom(String roomIdOrAlias) {
+    if (!roomIdOrAlias.isValidMatrixId) return null;
+    if (roomIdOrAlias.sigil == '#') {
+      return _client.getRoomByAlias(roomIdOrAlias);
+    }
+    if (roomIdOrAlias.sigil == '!') {
+      return _client.getRoomById(roomIdOrAlias);
+    }
+    return null;
+  }
+
+  FeaturedChannelProfileField _featuredChannelSnapshotFromRoom(
+    Room room, {
+    required String roomId,
+  }) {
+    final displayName = room.getLocalizedDisplayname().trim();
+    final topic = room.topic.trim();
+    final avatar = room.avatar;
+    return FeaturedChannelProfileField(
+      roomId: roomId,
+      title: displayName.isEmpty ? null : displayName,
+      subtitle: topic.isEmpty ? null : topic,
+      avatarUrl: avatar?.scheme == 'mxc' ? avatar : null,
+    );
+  }
+
+  FeaturedChannelProfileField? _featuredChannelForDisplay() {
+    final featured = _profileFields.featuredChannel;
+    if (featured == null) return null;
+    final room = _resolveFeaturedChannelRoom(featured.roomId);
+    if (room == null) return featured;
+    final fallback = _featuredChannelSnapshotFromRoom(
+      room,
+      roomId: featured.roomId,
+    );
+    return FeaturedChannelProfileField(
+      roomId: featured.roomId,
+      title: featured.title ?? fallback.title,
+      subtitle: featured.subtitle ?? fallback.subtitle,
+      avatarUrl: featured.avatarUrl ?? fallback.avatarUrl,
+    );
+  }
+
+  List<Room> _joinedPublicFeaturedChannelCandidates() {
+    final candidates = _client.rooms.where((room) {
+      if (room.membership != Membership.join) return false;
+      if (room.isSpace || room.isDirectChat) return false;
+      return room.joinRules == JoinRules.public ||
+          room.canonicalAlias.isNotEmpty;
+    }).toList();
+    candidates.sort((a, b) {
+      final aName = a.getLocalizedDisplayname().toLowerCase();
+      final bName = b.getLocalizedDisplayname().toLowerCase();
+      final byName = aName.compareTo(bName);
+      if (byName != 0) return byName;
+      return a.id.compareTo(b.id);
+    });
+    return candidates;
+  }
+
+  Future<void> _saveFeaturedChannel(
+    FeaturedChannelProfileField featured,
+  ) async {
+    if (!_isSelf || !_isEditMode) return;
+    final result = await showFutureLoadingDialog(
+      context: context,
+      future: () => _client.setProfileField(
+        _client.userID!,
+        profileFeaturedChannelField,
+        {profileFeaturedChannelField: featured.toJson()},
+      ),
+    );
+    if (result.error != null || !mounted) return;
+    await _reloadProfileFields();
+  }
+
+  Future<void> _removeFeaturedChannel() async {
+    if (!_isSelf || !_isEditMode) return;
+    final result = await showFutureLoadingDialog(
+      context: context,
+      future: () => _client.deleteProfileField(
+        _client.userID!,
+        profileFeaturedChannelField,
+      ),
+    );
+    if (result.error != null || !mounted) return;
+    await _reloadProfileFields();
+  }
+
+  Future<void> _pickFeaturedChannelFromJoined() async {
+    if (!_isSelf || !_isEditMode) return;
+    final channels = _joinedPublicFeaturedChannelCandidates();
+    if (channels.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No joined public channels found.')),
+      );
+      return;
+    }
+
+    final selectedRoom = await showModalActionPopup<Room>(
+      context: context,
+      title: L10n.of(context).profileFeaturedChannel,
+      message: 'Joined public channels',
+      cancelLabel: L10n.of(context).cancel,
+      useRootNavigator: false,
+      actions: channels.map((room) {
+        final displayName = room.getLocalizedDisplayname().trim();
+        return AdaptiveModalAction<Room>(
+          label: displayName.isEmpty ? room.id : displayName,
+          value: room,
+          icon: const Icon(Icons.tag_outlined),
+        );
+      }).toList(),
+    );
+    if (selectedRoom == null) return;
+    final roomId = selectedRoom.canonicalAlias.isNotEmpty
+        ? selectedRoom.canonicalAlias
+        : selectedRoom.id;
+    await _saveFeaturedChannel(
+      _featuredChannelSnapshotFromRoom(selectedRoom, roomId: roomId),
+    );
+  }
+
+  Future<void> _setFeaturedChannelManual() async {
+    if (!_isSelf || !_isEditMode) return;
+    final input = await showTextInputDialog(
+      useRootNavigator: false,
+      context: context,
+      title: L10n.of(context).profileFeaturedChannel,
+      message: 'Use #alias:server, !room:server, or a matrix.to link.',
+      okLabel: L10n.of(context).ok,
+      cancelLabel: L10n.of(context).cancel,
+      hintText: '#channel:example.org',
+      initialText: _profileFields.featuredChannel?.roomId,
+      autocorrect: false,
+      validator: (value) => normalizeFeaturedChannelIdentifier(value) == null
+          ? L10n.of(context).invalidInput
+          : null,
+    );
+    if (input == null) return;
+    final normalized = normalizeFeaturedChannelIdentifier(input);
+    if (normalized == null) return;
+
+    final room = _resolveFeaturedChannelRoom(normalized);
+    final payload = room == null
+        ? FeaturedChannelProfileField(roomId: normalized)
+        : _featuredChannelSnapshotFromRoom(room, roomId: normalized);
+    await _saveFeaturedChannel(payload);
+  }
+
+  Future<void> _showFeaturedChannelMenu() async {
+    if (!_isSelf || !_isEditMode) return;
+    final action = await showModalActionPopup<_FeaturedChannelAction>(
+      context: context,
+      title: L10n.of(context).profileFeaturedChannel,
+      cancelLabel: L10n.of(context).cancel,
+      useRootNavigator: false,
+      actions: [
+        AdaptiveModalAction(
+          label: 'Choose from joined channels',
+          icon: const Icon(Icons.list_alt_outlined),
+          value: _FeaturedChannelAction.pickJoined,
+          isDefaultAction: true,
+        ),
+        AdaptiveModalAction(
+          label: 'Enter room alias or ID',
+          icon: const Icon(Icons.edit_outlined),
+          value: _FeaturedChannelAction.manual,
+        ),
+        if (_profileFields.featuredChannel != null)
+          AdaptiveModalAction(
+            label: L10n.of(context).remove,
+            icon: const Icon(Icons.delete_outline),
+            value: _FeaturedChannelAction.remove,
+            isDestructive: true,
+          ),
+      ],
+    );
+    if (action == null) return;
+    switch (action) {
+      case _FeaturedChannelAction.pickJoined:
+        await _pickFeaturedChannelFromJoined();
+        return;
+      case _FeaturedChannelAction.manual:
+        await _setFeaturedChannelManual();
+        return;
+      case _FeaturedChannelAction.remove:
+        await _removeFeaturedChannel();
+        return;
+    }
+  }
+
+  Future<void> _openFeaturedChannel() async {
+    final featured = _profileFields.featuredChannel;
+    if (featured == null) return;
+    final normalized = normalizeFeaturedChannelIdentifier(featured.roomId);
+    if (normalized == null) return;
+    await UrlLauncher(
+      context,
+      'https://matrix.to/#/${Uri.encodeComponent(normalized)}',
+    ).launchUrl();
+    if (!mounted) return;
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) {
+      navigator.pop();
+    }
+  }
+
   Future<void> _setNameGradientAction() async {
     if (!_isSelf || !_isEditMode) return;
     final picked = await showGradientPicker(context);
@@ -357,7 +568,7 @@ class _UserDialogState extends State<UserDialog> {
       return;
     }
 
-    MatrixFile file;
+    Uint8List rawBytes;
     if (PlatformInfos.isMobile) {
       final result = await ImagePicker().pickImage(
         source: action == _ProfileAvatarAction.camera
@@ -366,14 +577,21 @@ class _UserDialogState extends State<UserDialog> {
         imageQuality: 50,
       );
       if (result == null) return;
-      file = MatrixFile(bytes: await result.readAsBytes(), name: result.path);
+      rawBytes = await result.readAsBytes();
     } else {
       final result = await selectFiles(context, type: FileType.image);
       if (result.isEmpty) return;
-      final picked = result.first;
-      file = MatrixFile(bytes: await picked.readAsBytes(), name: picked.name);
+      rawBytes = await result.first.readAsBytes();
     }
 
+    if (!mounted) return;
+    final croppedBytes = await showImageCropDialog(
+      context: context,
+      imageBytes: rawBytes,
+    );
+    if (croppedBytes == null || !mounted) return;
+
+    final file = MatrixFile(bytes: croppedBytes, name: 'avatar.png');
     final success = await showFutureLoadingDialog(
       context: context,
       future: () => _client.setAvatar(file),
@@ -859,6 +1077,50 @@ class _UserDialogState extends State<UserDialog> {
     await _reloadProfileFields();
   }
 
+  Future<void> _pickStickerAsEmojiStatus() async {
+    if (!_isSelf) return;
+
+    ImagePackImageContent? selected;
+
+    await showDialog(
+      context: context,
+      useRootNavigator: false,
+      builder: (context) => Dialog(
+        clipBehavior: Clip.hardEdge,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            maxWidth: 400,
+            maxHeight: 500,
+          ),
+          child: EmojiStatusStickerPicker(
+            client: _client,
+            onSelected: (sticker) {
+              selected = sticker;
+              Navigator.of(context).pop();
+            },
+          ),
+        ),
+      ),
+    );
+
+    if (selected == null || !mounted) return;
+
+    await showFutureLoadingDialog(
+      context: context,
+      future: () async {
+        await _client.setProfileField(
+          _client.userID!,
+          profileEmojiStatusField,
+          {profileEmojiStatusField: selected!.url.toString()},
+        );
+        profileEmojiStatusCache.invalidate(_client.userID!);
+      },
+    );
+
+    if (!mounted) return;
+    await _reloadProfileFields();
+  }
+
   Future<void> _showEmojiStatusMenu() async {
     if (!_isSelf) return;
 
@@ -875,6 +1137,11 @@ class _UserDialogState extends State<UserDialog> {
           isDefaultAction: true,
         ),
         AdaptiveModalAction(
+          label: L10n.of(context).pickFromStickers,
+          icon: const Icon(Icons.emoji_emotions_outlined),
+          value: _EmojiStatusAction.pickSticker,
+        ),
+        AdaptiveModalAction(
           label: L10n.of(context).remove,
           icon: const Icon(Icons.delete_outline),
           value: _EmojiStatusAction.remove,
@@ -889,6 +1156,9 @@ class _UserDialogState extends State<UserDialog> {
       case _EmojiStatusAction.pickImage:
         await _pickEmojiStatusImage();
         return;
+      case _EmojiStatusAction.pickSticker:
+        await _pickStickerAsEmojiStatus();
+        return;
       case _EmojiStatusAction.remove:
         await _removeEmojiStatus();
         return;
@@ -902,6 +1172,11 @@ class _UserDialogState extends State<UserDialog> {
     IconData? icon,
   }) {
     final borderColor = Color.lerp(foreground, background, 0.68) ?? foreground;
+    final textStyle = TextStyle(
+      color: foreground,
+      fontSize: 12.5,
+      fontWeight: FontWeight.w600,
+    );
     return Container(
       constraints: const BoxConstraints(maxWidth: 300),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -918,16 +1193,7 @@ class _UserDialogState extends State<UserDialog> {
             const SizedBox(width: 6),
           ],
           Flexible(
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: foreground,
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+            child: _PillMarqueeText(text: text, textStyle: textStyle),
           ),
         ],
       ),
@@ -1066,12 +1332,24 @@ class _UserDialogState extends State<UserDialog> {
   }
 
   Widget _buildFeaturedChannelSection(BuildContext context) {
-    final featured = _profileFields.featuredChannel;
-    if (featured == null) return const SizedBox.shrink();
-
+    final isEditable = _isSelf && _isEditMode;
+    final featured = _featuredChannelForDisplay();
+    final hasFeatured = featured != null;
+    if (!hasFeatured && !isEditable) return const SizedBox.shrink();
     final theme = Theme.of(context);
-
-    return Container(
+    final linkedRoom = hasFeatured
+        ? _resolveFeaturedChannelRoom(featured.roomId)
+        : null;
+    final joinedMemberCount = linkedRoom == null
+        ? 0
+        : (linkedRoom.summary.mJoinedMemberCount ?? 0) +
+              (linkedRoom.summary.mInvitedMemberCount ?? 0);
+    final memberCountText = joinedMemberCount > 0
+        ? L10n.of(context).countParticipants(joinedMemberCount)
+        : null;
+    final title = featured?.title ?? featured?.roomId ?? '—';
+    final subtitle = featured?.subtitle;
+    final content = Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
@@ -1079,44 +1357,81 @@ class _UserDialogState extends State<UserDialog> {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        spacing: 10,
+        spacing: 12,
         children: [
           Text(
             L10n.of(context).profileFeaturedChannel,
             style: theme.textTheme.labelLarge,
           ),
-          Row(
-            spacing: 10,
-            children: [
-              Avatar(
-                mxContent: featured.avatarUrl,
-                name: featured.title ?? featured.roomId,
-                size: 44,
-              ),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      featured.title ?? featured.roomId,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleSmall,
-                    ),
-                    if (featured.subtitle != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              spacing: 12,
+              children: [
+                Avatar(mxContent: featured?.avatarUrl, name: title, size: 52),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        featured.subtitle!,
+                        title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall,
+                        style: theme.textTheme.titleSmall,
                       ),
-                  ],
+                      if (subtitle != null)
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      if (memberCountText != null)
+                        Text(
+                          memberCountText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        )
+                      else if (!hasFeatured && isEditable)
+                        Text(
+                          'Tap to set a featured channel',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-              const Icon(Icons.chevron_right),
-            ],
+                Icon(
+                  isEditable && !hasFeatured
+                      ? Icons.add_circle_outline
+                      : Icons.chevron_right,
+                  size: 22,
+                ),
+              ],
+            ),
           ),
         ],
+      ),
+    );
+
+    final onTap = isEditable
+        ? _showFeaturedChannelMenu
+        : hasFeatured
+        ? _openFeaturedChannel
+        : null;
+    if (onTap == null) return content;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: content,
       ),
     );
   }
@@ -1142,7 +1457,8 @@ class _UserDialogState extends State<UserDialog> {
     final avatarSize = 96.0 * scale;
     final headerTopPadding = 14.0 * scale;
     final headerHorizontalPadding = 18.0 * scale;
-    final headerBottomPadding = 22.0 * scale;
+    final headerBottomPadding = (_isEditMode ? 22.0 : 12.0) * scale;
+    final detailsTopPadding = (_isEditMode ? 18.0 : 10.0) * scale;
 
     return AlertDialog.adaptive(
       contentPadding: EdgeInsets.zero,
@@ -1206,6 +1522,7 @@ class _UserDialogState extends State<UserDialog> {
                 ColoredBox(color: headerColor),
                 if (hasBanner)
                   MxcImage(
+                    key: ValueKey(bannerUri),
                     uri: bannerUri,
                     width: dialogWidth,
                     height: dialogHeight,
@@ -1303,7 +1620,7 @@ class _UserDialogState extends State<UserDialog> {
                                                 width: 20,
                                                 height: 20,
                                                 fit: BoxFit.cover,
-                                                isThumbnail: true,
+                                                isThumbnail: false,
                                               ),
                                             ),
                                     ),
@@ -1435,7 +1752,7 @@ class _UserDialogState extends State<UserDialog> {
                                           width: 16 * scale,
                                           height: 16 * scale,
                                           fit: BoxFit.cover,
-                                          isThumbnail: true,
+                                          isThumbnail: false,
                                         ),
                                       ),
                                     ],
@@ -1529,14 +1846,20 @@ class _UserDialogState extends State<UserDialog> {
                     ),
                     Expanded(
                       child: SingleChildScrollView(
-                        padding: EdgeInsets.all(18 * scale),
+                        padding: EdgeInsets.fromLTRB(
+                          18 * scale,
+                          detailsTopPadding,
+                          18 * scale,
+                          18 * scale,
+                        ),
                         child: Column(
                           spacing: 12 * scale,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             if (_isSelf && _isEditMode)
                               _buildNameGradientSection(context),
-                            if (_profileFields.featuredChannel != null)
+                            if ((_isSelf && _isEditMode) ||
+                                _profileFields.featuredChannel != null)
                               _buildFeaturedChannelSection(context),
                             _buildBioSection(context),
                             _buildUsernameSection(context),
@@ -1820,6 +2143,123 @@ class _BackgroundColorPickerDialogState
   }
 }
 
+class _PillMarqueeText extends StatefulWidget {
+  final String text;
+  final TextStyle textStyle;
+
+  const _PillMarqueeText({required this.text, required this.textStyle});
+
+  @override
+  State<_PillMarqueeText> createState() => _PillMarqueeTextState();
+}
+
+class _PillMarqueeTextState extends State<_PillMarqueeText>
+    with SingleTickerProviderStateMixin {
+  static const _gap = 24.0;
+  static const _pixelsPerSecond = 24.0;
+
+  late final AnimationController _controller;
+  double? _lastDistance;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _start(double distance) {
+    if (_lastDistance == distance && _controller.isAnimating) return;
+    _lastDistance = distance;
+    final millis = math.max(1, (distance / _pixelsPerSecond * 1000).round());
+    _controller
+      ..duration = Duration(milliseconds: millis)
+      ..repeat();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final singleLineText = widget.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (singleLineText.isEmpty) return const SizedBox.shrink();
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxWidth = constraints.maxWidth;
+        final textPainter = TextPainter(
+          text: TextSpan(text: singleLineText, style: widget.textStyle),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 1,
+        )..layout(maxWidth: double.infinity);
+        final textWidth = textPainter.width;
+
+        if (maxWidth.isInfinite || textWidth <= maxWidth) {
+          _lastDistance = null;
+          if (_controller.isAnimating) _controller.stop();
+          return Text(
+            singleLineText,
+            maxLines: 1,
+            softWrap: false,
+            style: widget.textStyle,
+          );
+        }
+
+        final distance = textWidth + _gap;
+        _start(distance);
+
+        return Semantics(
+          label: singleLineText,
+          child: SizedBox(
+            width: maxWidth,
+            child: ClipRect(
+              child: ExcludeSemantics(
+                child: AnimatedBuilder(
+                  animation: _controller,
+                  builder: (context, child) {
+                    return Transform.translate(
+                      offset: Offset(-distance * _controller.value, 0),
+                      child: child,
+                    );
+                  },
+                  child: OverflowBox(
+                    alignment: Alignment.centerLeft,
+                    fit: OverflowBoxFit.deferToChild,
+                    minWidth: 0,
+                    maxWidth: double.infinity,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          singleLineText,
+                          maxLines: 1,
+                          softWrap: false,
+                          style: widget.textStyle,
+                        ),
+                        const SizedBox(width: _gap),
+                        Text(
+                          singleLineText,
+                          maxLines: 1,
+                          softWrap: false,
+                          style: widget.textStyle,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _BackgroundColorChoice {
   final int? value;
   final bool remove;
@@ -1833,9 +2273,11 @@ enum _BackgroundAppearanceAction { backgroundColor, banner }
 
 enum _BannerAction { pickImage, remove }
 
-enum _EmojiStatusAction { pickImage, remove }
+enum _EmojiStatusAction { pickImage, pickSticker, remove }
 
 enum _ProfileAvatarAction { camera, file, remove }
+
+enum _FeaturedChannelAction { pickJoined, manual, remove }
 
 class _NamePillStyle {
   final Color background;

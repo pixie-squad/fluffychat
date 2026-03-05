@@ -13,6 +13,7 @@ import 'package:fluffychat/pages/chat/chat.dart';
 import 'package:fluffychat/pages/chat/chat_app_bar_list_tile.dart';
 import 'package:fluffychat/pages/chat/chat_app_bar_title.dart';
 import 'package:fluffychat/pages/chat/chat_event_list.dart';
+import 'package:fluffychat/pages/chat/drag_select_overlay.dart';
 import 'package:fluffychat/pages/chat/encryption_button.dart';
 import 'package:fluffychat/pages/chat/pinned_events.dart';
 import 'package:fluffychat/pages/chat/reply_display.dart';
@@ -26,6 +27,7 @@ import 'package:fluffychat/widgets/unread_rooms_badge.dart';
 import '../../utils/stream_extension.dart';
 import 'chat_emoji_picker.dart';
 import 'chat_input_row.dart';
+import 'pending_media_preview.dart';
 
 enum _EventContextAction { info, report }
 
@@ -53,11 +55,14 @@ class ChatView extends StatelessWidget {
       canPop:
           controller.selectedEvents.isEmpty &&
           !controller.showEmojiPicker &&
-          controller.activeThreadId == null,
+          controller.activeThreadId == null &&
+          controller.pendingMediaFiles.isEmpty,
       onPopInvokedWithResult: (pop, _) async {
         if (pop) return;
         if (controller.selectedEvents.isNotEmpty) {
           controller.clearSelectedEvents();
+        } else if (controller.pendingMediaFiles.isNotEmpty) {
+          controller.clearPendingMedia();
         } else if (controller.showEmojiPicker) {
           controller.emojiPickerAction();
         } else if (controller.activeThreadId != null) {
@@ -330,9 +335,12 @@ class ChatView extends StatelessWidget {
                       child: Column(
                         children: <Widget>[
                           Expanded(
-                            child: GestureDetector(
-                              onTap: controller.clearSingleSelectedEvent,
-                              child: ChatEventList(controller: controller),
+                            child: DragSelectOverlay(
+                              controller: controller,
+                              child: GestureDetector(
+                                onTap: controller.clearSingleSelectedEvent,
+                                child: ChatEventList(controller: controller),
+                              ),
                             ),
                           ),
                           if (controller.showScrollDownButton)
@@ -395,6 +403,7 @@ class ChatView extends StatelessWidget {
                                         mainAxisSize: .min,
                                         children: [
                                           ReplyDisplay(controller),
+                                          PendingMediaPreview(controller),
                                           ChatInputRow(controller),
                                           ChatEmojiPicker(controller),
                                         ],

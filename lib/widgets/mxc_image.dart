@@ -131,6 +131,28 @@ class _MxcImageState extends State<MxcImage> {
   }
 
   @override
+  void didUpdateWidget(covariant MxcImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final imageSourceChanged =
+        oldWidget.uri != widget.uri ||
+        oldWidget.event?.eventId != widget.event?.eventId ||
+        oldWidget.cacheKey != widget.cacheKey ||
+        oldWidget.client != widget.client ||
+        oldWidget.isThumbnail != widget.isThumbnail ||
+        oldWidget.animated != widget.animated ||
+        oldWidget.thumbnailMethod != widget.thumbnailMethod;
+
+    if (!imageSourceChanged) return;
+
+    _imageDataNoCache = null;
+    if (oldWidget.cacheKey != null && oldWidget.cacheKey == widget.cacheKey) {
+      _imageDataCache.remove(widget.cacheKey);
+    }
+
+    _tryLoad();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final data = _imageData;
     final hasData = data != null && data.isNotEmpty;

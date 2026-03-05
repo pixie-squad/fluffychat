@@ -496,7 +496,7 @@ class SendFileDialogState extends State<SendFileDialog> {
   }
 }
 
-extension on ScaffoldMessengerState {
+extension LoadingSnackBarExtension on ScaffoldMessengerState {
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason> showLoadingSnackBar(
     String title,
   ) {

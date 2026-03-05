@@ -47,28 +47,34 @@ class ChatEventList extends StatelessWidget {
     }
 
     // Build album grouping maps.
-    // albumGroups: albumId -> list of events (in display order, oldest first)
-    // albumAnchorIds: eventId of the anchor event (oldest) for each album
+    // albumGroupsBySender: senderId -> (albumId -> list of events)
+    // albumEventsByAnchorId: eventId of the anchor event -> all album events
     // albumContinuationIds: eventIds of non-anchor events that should be hidden
-    final albumGroups = <String, List<Event>>{};
-    final albumAnchorIds = <String, String>{};
+    final albumGroupsBySender = <String, Map<String, List<Event>>>{};
+    final albumEventsByAnchorId = <String, List<Event>>{};
     final albumContinuationIds = <String>{};
     for (final event in events) {
       final albumId = event.content.tryGet<String>('r.trd.album_id');
       if (albumId != null) {
-        albumGroups.putIfAbsent(albumId, () => []);
-        albumGroups[albumId]!.add(event);
+        final senderAlbumGroups = albumGroupsBySender.putIfAbsent(
+          event.senderId,
+          () => {},
+        );
+        senderAlbumGroups.putIfAbsent(albumId, () => []);
+        senderAlbumGroups[albumId]!.add(event);
       }
     }
-    for (final entry in albumGroups.entries) {
-      if (entry.value.length < 2) continue;
-      // Events list is reversed (newest first), so the last item is the oldest
-      // (displayed first visually). That's our anchor.
-      final anchor = entry.value.last;
-      albumAnchorIds[anchor.eventId] = entry.key;
-      for (final event in entry.value) {
-        if (event.eventId != anchor.eventId) {
-          albumContinuationIds.add(event.eventId);
+    for (final senderAlbumGroups in albumGroupsBySender.values) {
+      for (final albumEvents in senderAlbumGroups.values) {
+        if (albumEvents.length < 2) continue;
+        // Events list is reversed (newest first), so the last item is the
+        // oldest (displayed first visually). That's our anchor.
+        final anchor = albumEvents.last;
+        albumEventsByAnchorId[anchor.eventId] = albumEvents;
+        for (final event in albumEvents) {
+          if (event.eventId != anchor.eventId) {
+            albumContinuationIds.add(event.eventId);
+          }
         }
       }
     }
@@ -76,105 +82,106 @@ class ChatEventList extends StatelessWidget {
     final hasWallpaper =
         controller.room.client.applicationAccountConfig.wallpaperUrl != null;
 
-    return SelectionArea(
-      child: ListView.custom(
-        padding: EdgeInsets.only(
-          top: 16,
-          bottom: 8,
-          left: horizontalPadding,
-          right: horizontalPadding,
-        ),
-        reverse: true,
-        controller: controller.scrollController,
-        keyboardDismissBehavior: PlatformInfos.isIOS
-            ? ScrollViewKeyboardDismissBehavior.onDrag
-            : ScrollViewKeyboardDismissBehavior.manual,
-        childrenDelegate: SliverChildBuilderDelegate(
-          (BuildContext context, int i) {
-            // Footer to display typing indicator and read receipts:
-            if (i == 0) {
-              if (timeline.canRequestFuture) {
+    final listView = ListView.custom(
+      padding: EdgeInsets.only(
+        top: 16,
+        bottom: 8,
+        left: horizontalPadding,
+        right: horizontalPadding,
+      ),
+      reverse: true,
+      controller: controller.scrollController,
+      keyboardDismissBehavior: PlatformInfos.isIOS
+          ? ScrollViewKeyboardDismissBehavior.onDrag
+          : ScrollViewKeyboardDismissBehavior.manual,
+      childrenDelegate: SliverChildBuilderDelegate(
+        (BuildContext context, int i) {
+          // Footer to display typing indicator and read receipts:
+          if (i == 0) {
+            if (timeline.canRequestFuture) {
+              return Center(
+                child: TextButton.icon(
+                  onPressed: timeline.isRequestingFuture
+                      ? null
+                      : controller.requestFuture,
+                  icon: timeline.isRequestingFuture
+                      ? CircularProgressIndicator.adaptive(strokeWidth: 2)
+                      : const Icon(Icons.arrow_downward_outlined),
+                  label: Text(L10n.of(context).loadMore),
+                ),
+              );
+            }
+            return Column(
+              mainAxisSize: .min,
+              children: [
+                SeenByRow(event: events.first),
+                TypingIndicators(controller),
+              ],
+            );
+          }
+
+          // Request history button or progress indicator:
+          if (i == events.length + 1) {
+            if (controller.activeThreadId != null ||
+                !timeline.canRequestHistory) {
+              return const SizedBox.shrink();
+            }
+            return Builder(
+              builder: (context) {
+                final visibleIndex = timeline.events.lastIndexWhere(
+                  (event) => !event.isCollapsedState && event.isVisibleInGui,
+                );
+                if (visibleIndex > timeline.events.length - 50) {
+                  WidgetsBinding.instance.addPostFrameCallback(
+                    controller.requestHistory,
+                  );
+                }
                 return Center(
                   child: TextButton.icon(
-                    onPressed: timeline.isRequestingFuture
+                    onPressed: timeline.isRequestingHistory
                         ? null
-                        : controller.requestFuture,
-                    icon: timeline.isRequestingFuture
+                        : controller.requestHistory,
+                    icon: timeline.isRequestingHistory
                         ? CircularProgressIndicator.adaptive(strokeWidth: 2)
-                        : const Icon(Icons.arrow_downward_outlined),
+                        : const Icon(Icons.arrow_upward_outlined),
                     label: Text(L10n.of(context).loadMore),
                   ),
                 );
-              }
-              return Column(
-                mainAxisSize: .min,
-                children: [
-                  SeenByRow(event: events.first),
-                  TypingIndicators(controller),
-                ],
-              );
-            }
-
-            // Request history button or progress indicator:
-            if (i == events.length + 1) {
-              if (controller.activeThreadId != null ||
-                  !timeline.canRequestHistory) {
-                return const SizedBox.shrink();
-              }
-              return Builder(
-                builder: (context) {
-                  final visibleIndex = timeline.events.lastIndexWhere(
-                    (event) => !event.isCollapsedState && event.isVisibleInGui,
-                  );
-                  if (visibleIndex > timeline.events.length - 50) {
-                    WidgetsBinding.instance.addPostFrameCallback(
-                      controller.requestHistory,
-                    );
-                  }
-                  return Center(
-                    child: TextButton.icon(
-                      onPressed: timeline.isRequestingHistory
-                          ? null
-                          : controller.requestHistory,
-                      icon: timeline.isRequestingHistory
-                          ? CircularProgressIndicator.adaptive(strokeWidth: 2)
-                          : const Icon(Icons.arrow_upward_outlined),
-                      label: Text(L10n.of(context).loadMore),
-                    ),
-                  );
-                },
-              );
-            }
-            i--;
-
-            // The message at this index:
-            final event = events[i];
-            final animateIn =
-                animateInEventIndex != null &&
-                timeline.events.length > animateInEventIndex &&
-                event == timeline.events[animateInEventIndex];
-
-            final nextEvent = i + 1 < events.length ? events[i + 1] : null;
-            final previousEvent = i > 0 ? events[i - 1] : null;
-
-            // Collapsed state event
-            final canExpand =
-                event.isCollapsedState &&
-                nextEvent?.isCollapsedState == true &&
-                previousEvent?.isCollapsedState != true;
-            final isCollapsed =
-                event.isCollapsedState &&
-                previousEvent?.isCollapsedState == true &&
-                !controller.expandedEventIds.contains(event.eventId);
-
-            // Album grouping
-            final isAlbumContinuation = albumContinuationIds.contains(
-              event.eventId,
+              },
             );
-            final albumId = albumAnchorIds[event.eventId];
-            final albumEvents = albumId != null ? albumGroups[albumId] : null;
+          }
+          i--;
 
-            return AutoScrollTag(
+          // The message at this index:
+          final event = events[i];
+          final animateIn =
+              animateInEventIndex != null &&
+              timeline.events.length > animateInEventIndex &&
+              event == timeline.events[animateInEventIndex];
+
+          final nextEvent = i + 1 < events.length ? events[i + 1] : null;
+          final previousEvent = i > 0 ? events[i - 1] : null;
+
+          // Collapsed state event
+          final canExpand =
+              event.isCollapsedState &&
+              nextEvent?.isCollapsedState == true &&
+              previousEvent?.isCollapsedState != true;
+          final isCollapsed =
+              event.isCollapsedState &&
+              previousEvent?.isCollapsedState == true &&
+              !controller.expandedEventIds.contains(event.eventId);
+
+          // Album grouping
+          final isAlbumContinuation = albumContinuationIds.contains(
+            event.eventId,
+          );
+          final albumEvents = albumEventsByAnchorId[event.eventId];
+
+          return _MessageKeyRegistrar(
+            eventId: event.eventId,
+            controller: controller,
+            child: AutoScrollTag(
               key: ValueKey(event.eventId),
               index: i,
               controller: controller.scrollController,
@@ -226,13 +233,60 @@ class ChatEventList extends StatelessWidget {
                 isAlbumContinuation: isAlbumContinuation,
                 quickReactions: quickReactions,
               ),
-            );
-          },
-          childCount: events.length + 2,
-          findChildIndexCallback: (key) =>
-              controller.findChildIndexCallback(key, thisEventsKeyMap),
-        ),
+            ),
+          );
+        },
+        childCount: events.length + 2,
+        findChildIndexCallback: (key) =>
+            controller.findChildIndexCallback(key, thisEventsKeyMap),
       ),
     );
+
+    return listView;
+  }
+}
+
+class _MessageKeyRegistrar extends StatefulWidget {
+  final String eventId;
+  final ChatController controller;
+  final Widget child;
+
+  const _MessageKeyRegistrar({
+    required this.eventId,
+    required this.controller,
+    required this.child,
+  });
+
+  @override
+  State<_MessageKeyRegistrar> createState() => _MessageKeyRegistrarState();
+}
+
+class _MessageKeyRegistrarState extends State<_MessageKeyRegistrar> {
+  final GlobalKey _key = GlobalKey();
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.registerMessageKey(widget.eventId, _key);
+  }
+
+  @override
+  void didUpdateWidget(covariant _MessageKeyRegistrar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.eventId != widget.eventId) {
+      oldWidget.controller.unregisterMessageKey(oldWidget.eventId);
+      widget.controller.registerMessageKey(widget.eventId, _key);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.unregisterMessageKey(widget.eventId);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return KeyedSubtree(key: _key, child: widget.child);
   }
 }

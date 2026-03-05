@@ -1,7 +1,10 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import 'package:matrix/matrix.dart';
 
+import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/pages/image_viewer/image_viewer.dart';
 import 'package:fluffychat/widgets/blur_hash.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
@@ -18,90 +21,105 @@ class MediaAlbum extends StatelessWidget {
     super.key,
   });
 
-  static const double _maxWidth = 300.0;
+  static const double _singleMediaSize = 256.0;
+  static const double _groupMediaSize = 256.0;
+  static const double _maxWidth = FluffyThemes.columnWidth * 1.5;
   static const double _gap = 2.0;
 
-  int get _crossAxisCount {
-    final count = events.length;
-    if (count <= 2) return 2;
+  int _crossAxisCountFor(int count) {
+    if (count <= 4) return 2;
     return 3;
   }
 
   @override
   Widget build(BuildContext context) {
-    final visibleEvents =
-        events.where((e) => !e.redacted).toList();
-
+    final visibleEvents = events.where((e) => !e.redacted).toList();
     if (visibleEvents.isEmpty) return const SizedBox.shrink();
-    if (visibleEvents.length == 1) {
-      return _AlbumItem(
-        event: visibleEvents.first,
-        timeline: timeline,
-        borderRadius: borderRadius,
-        width: _maxWidth,
-        height: _maxWidth,
-      );
-    }
 
-    final crossAxisCount = _crossAxisCount;
-    final rows = (visibleEvents.length / crossAxisCount).ceil();
-    final totalGapWidth = _gap * (crossAxisCount - 1);
-    final cellSize = (_maxWidth - totalGapWidth) / crossAxisCount;
-    final totalHeight = rows * cellSize + (rows - 1) * _gap;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.maxWidth.isFinite
+            ? min(constraints.maxWidth, _maxWidth)
+            : _maxWidth;
 
-    return Material(
-      clipBehavior: Clip.hardEdge,
-      borderRadius: borderRadius,
-      color: Colors.transparent,
-      child: SizedBox(
-        width: _maxWidth,
-        height: totalHeight,
-        child: GridView.builder(
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: crossAxisCount,
-            mainAxisSpacing: _gap,
-            crossAxisSpacing: _gap,
+        if (visibleEvents.length == 1) {
+          final singleSize = min(_singleMediaSize, availableWidth);
+          return _AlbumItem(
+            key: ValueKey(visibleEvents.first.eventId),
+            event: visibleEvents.first,
+            timeline: timeline,
+            borderRadius: borderRadius,
+            width: singleSize,
+            height: singleSize,
+          );
+        }
+
+        final crossAxisCount = _crossAxisCountFor(visibleEvents.length);
+        final desiredWidth =
+            _groupMediaSize * crossAxisCount + _gap * (crossAxisCount - 1);
+        final albumWidth = min(desiredWidth, availableWidth);
+
+        final rows = (visibleEvents.length / crossAxisCount).ceil();
+        final totalGapWidth = _gap * (crossAxisCount - 1);
+        final cellSize = max(0.0, albumWidth - totalGapWidth) / crossAxisCount;
+        final totalHeight = rows * cellSize + (rows - 1) * _gap;
+
+        return Material(
+          clipBehavior: Clip.hardEdge,
+          borderRadius: borderRadius,
+          color: Colors.transparent,
+          child: SizedBox(
+            width: albumWidth,
+            height: totalHeight,
+            child: GridView.builder(
+              primary: false,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: crossAxisCount,
+                mainAxisSpacing: _gap,
+                crossAxisSpacing: _gap,
+              ),
+              itemCount: visibleEvents.length,
+              itemBuilder: (context, index) {
+                final event = visibleEvents[index];
+                // Calculate corner radii: only the outer corners of the grid get
+                // the album's border radius, inner corners are sharp.
+                final isTop = index < crossAxisCount;
+                final isBottom =
+                    index >= visibleEvents.length - crossAxisCount ||
+                    index >= (rows - 1) * crossAxisCount;
+                final isLeft = index % crossAxisCount == 0;
+                final isRight =
+                    index % crossAxisCount == crossAxisCount - 1 ||
+                    index == visibleEvents.length - 1;
+
+                final itemRadius = BorderRadius.only(
+                  topLeft: isTop && isLeft ? borderRadius.topLeft : Radius.zero,
+                  topRight: isTop && isRight
+                      ? borderRadius.topRight
+                      : Radius.zero,
+                  bottomLeft: isBottom && isLeft
+                      ? borderRadius.bottomLeft
+                      : Radius.zero,
+                  bottomRight: isBottom && isRight
+                      ? borderRadius.bottomRight
+                      : Radius.zero,
+                );
+
+                return _AlbumItem(
+                  key: ValueKey(event.eventId),
+                  event: event,
+                  timeline: timeline,
+                  borderRadius: itemRadius,
+                  width: cellSize,
+                  height: cellSize,
+                );
+              },
+            ),
           ),
-          itemCount: visibleEvents.length,
-          itemBuilder: (context, index) {
-            final event = visibleEvents[index];
-            // Calculate corner radii: only the outer corners of the grid get
-            // the album's border radius, inner corners are sharp.
-            final isTop = index < crossAxisCount;
-            final isBottom =
-                index >= visibleEvents.length - crossAxisCount ||
-                index >=
-                    (rows - 1) * crossAxisCount;
-            final isLeft = index % crossAxisCount == 0;
-            final isRight = index % crossAxisCount == crossAxisCount - 1 ||
-                index == visibleEvents.length - 1;
-
-            final itemRadius = BorderRadius.only(
-              topLeft: isTop && isLeft
-                  ? borderRadius.topLeft
-                  : Radius.zero,
-              topRight: isTop && isRight
-                  ? borderRadius.topRight
-                  : Radius.zero,
-              bottomLeft: isBottom && isLeft
-                  ? borderRadius.bottomLeft
-                  : Radius.zero,
-              bottomRight: isBottom && isRight
-                  ? borderRadius.bottomRight
-                  : Radius.zero,
-            );
-
-            return _AlbumItem(
-              event: event,
-              timeline: timeline,
-              borderRadius: itemRadius,
-              width: cellSize,
-              height: cellSize,
-            );
-          },
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -119,6 +137,7 @@ class _AlbumItem extends StatelessWidget {
     required this.width,
     required this.height,
     this.timeline,
+    super.key,
   });
 
   @override
@@ -138,11 +157,8 @@ class _AlbumItem extends StatelessWidget {
         borderRadius: borderRadius,
         onTap: () => showDialog(
           context: context,
-          builder: (_) => ImageViewer(
-            event,
-            timeline: timeline,
-            outerContext: context,
-          ),
+          builder: (_) =>
+              ImageViewer(event, timeline: timeline, outerContext: context),
         ),
         child: Stack(
           fit: StackFit.expand,

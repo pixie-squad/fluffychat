@@ -32,6 +32,7 @@ class GradientPickerResult {
 class _GradientCache {
   final Map<String, List<Color>?> _colorCache = {};
   final Map<String, bool> _animatedCache = {};
+  final ValueNotifier<int> version = ValueNotifier<int>(0);
 
   bool has(String userId) => _colorCache.containsKey(userId);
 
@@ -78,6 +79,7 @@ class _GradientCache {
   void invalidate(String userId) {
     _colorCache.remove(userId);
     _animatedCache.remove(userId);
+    version.value++;
   }
 }
 
@@ -138,13 +140,21 @@ class _GradientDisplayNameState extends State<GradientDisplayName>
       vsync: this,
       duration: const Duration(milliseconds: 4000),
     );
+    gradientCache.version.addListener(_onCacheInvalidated);
     _load();
   }
 
   @override
   void dispose() {
+    gradientCache.version.removeListener(_onCacheInvalidated);
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onCacheInvalidated() {
+    if (!gradientCache.has(widget.userId)) {
+      _load();
+    }
   }
 
   @override
@@ -225,9 +235,10 @@ class _GradientDisplayNameState extends State<GradientDisplayName>
       builder: (context, child) {
         return ShaderMask(
           blendMode: BlendMode.srcIn,
-          shaderCallback: (bounds) =>
-              _scrollingGradient(colors, _controller.value)
-                  .createShader(bounds),
+          shaderCallback: (bounds) => _scrollingGradient(
+            colors,
+            _controller.value,
+          ).createShader(bounds),
           child: child,
         );
       },
@@ -254,7 +265,7 @@ class _GradientPickerDialog extends StatefulWidget {
 
 class _GradientPickerDialogState extends State<_GradientPickerDialog> {
   bool _customMode = false;
-  final List<Color> _colors = [const Color(0xFFFF1744), const Color(0xFF448AFF)];
+  List<Color> _colors = [const Color(0xFFFF1744), const Color(0xFF448AFF)];
   int _selectedStop = 0;
   bool _animated = false;
 
@@ -287,12 +298,12 @@ class _GradientPickerDialogState extends State<_GradientPickerDialog> {
   }
 
   Widget _buildAnimatedSwitch() => SwitchListTile.adaptive(
-        dense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-        title: const Text('Animate'), // TODO: l10n
-        value: _animated,
-        onChanged: (v) => setState(() => _animated = v),
-      );
+    dense: true,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+    title: const Text('Animate'), // TODO: l10n
+    value: _animated,
+    onChanged: (v) => setState(() => _animated = v),
+  );
 
   Widget _buildPresets() {
     final presetColors = _colors;
@@ -405,7 +416,7 @@ class _GradientPickerDialogState extends State<_GradientPickerDialog> {
                 IconButton(
                   icon: const Icon(Icons.add_circle_outline, size: 20),
                   onPressed: () => setState(() {
-                    _colors.add(const Color(0xFFFFFFFF));
+                    _colors = [..._colors, const Color(0xFFFFFFFF)];
                     _selectedStop = _colors.length - 1;
                   }),
                 ),
@@ -413,7 +424,8 @@ class _GradientPickerDialogState extends State<_GradientPickerDialog> {
                 IconButton(
                   icon: const Icon(Icons.remove_circle_outline, size: 20),
                   onPressed: () => setState(() {
-                    _colors.removeAt(_selectedStop);
+                    _colors = List<Color>.from(_colors)
+                      ..removeAt(_selectedStop);
                     if (_selectedStop >= _colors.length) {
                       _selectedStop = _colors.length - 1;
                     }
@@ -430,8 +442,10 @@ class _GradientPickerDialogState extends State<_GradientPickerDialog> {
             children: [
               for (final color in _palette)
                 GestureDetector(
-                  onTap: () =>
-                      setState(() => _colors[_selectedStop] = color),
+                  onTap: () => setState(() {
+                    _colors = List<Color>.from(_colors)
+                      ..[_selectedStop] = color;
+                  }),
                   child: Container(
                     width: 28,
                     height: 28,
@@ -471,7 +485,6 @@ class _AnimatedGradientPreview extends StatefulWidget {
   final List<Color> colors;
 
   const _AnimatedGradientPreview({required this.colors});
-
 
   @override
   State<_AnimatedGradientPreview> createState() =>
@@ -513,4 +526,3 @@ class _AnimatedGradientPreviewState extends State<_AnimatedGradientPreview>
     );
   }
 }
-

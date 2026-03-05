@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:fluffychat/config/emoji_rendering.dart';
 import 'package:fluffychat/config/routes.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
@@ -55,15 +56,18 @@ class FluffyChatApp extends StatelessWidget {
         localizationsDelegates: L10n.localizationsDelegates,
         supportedLocales: L10n.supportedLocales,
         routerConfig: router,
-        builder: (context, child) => AppLockWidget(
-          pincode: pincode,
-          clients: clients,
-          // Need a navigator above the Matrix widget for
-          // displaying dialogs
-          child: Matrix(
+        builder: (context, child) => DefaultTextStyle.merge(
+          style: const TextStyle(fontFamilyFallback: emojiFallbackFamilies),
+          child: AppLockWidget(
+            pincode: pincode,
             clients: clients,
-            store: store,
-            child: testWidget ?? child,
+            // Need a navigator above the Matrix widget for
+            // displaying dialogs
+            child: Matrix(
+              clients: clients,
+              store: store,
+              child: testWidget ?? child,
+            ),
           ),
         ),
       ),

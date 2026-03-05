@@ -8,6 +8,7 @@ import 'package:matrix/matrix.dart';
 import 'package:slugify/slugify.dart';
 
 import 'package:fluffychat/config/app_config.dart';
+import 'package:fluffychat/config/emoji_rendering.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/markdown_context_builder.dart';
@@ -85,9 +86,11 @@ class InputBar extends StatelessWidget {
         break;
       }
     }
-    final lastWord =
-        lastWsIndex == -1 ? searchText : searchText.substring(lastWsIndex + 1);
-    final hasTrigger = lastWord.startsWith(':') ||
+    final lastWord = lastWsIndex == -1
+        ? searchText
+        : searchText.substring(lastWsIndex + 1);
+    final hasTrigger =
+        lastWord.startsWith(':') ||
         lastWord.startsWith('@') ||
         lastWord.startsWith('#') ||
         (searchText.startsWith('/') && lastWsIndex == -1);
@@ -298,7 +301,7 @@ class InputBar extends StatelessWidget {
             dimension: size,
             child: Text(
               suggestion['emoji']!,
-              style: const TextStyle(fontSize: 16),
+              style: appleEmojiTextStyle.copyWith(fontSize: 16),
             ),
           ),
           title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),

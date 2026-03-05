@@ -55,7 +55,9 @@ enum AppSettings<T> {
   enableSoftLogout<bool>('chat.fluffy.enable_soft_logout', false),
   enableMatrixNativeOIDC<bool>('chat.fluffy.enable_matrix_native_oidc', false),
   presetHomeserver<String>('chat.fluffy.preset_homeserver', ''),
-  welcomeText<String>('chat.fluffy.welcome_text', '');
+  welcomeText<String>('chat.fluffy.welcome_text', ''),
+  compressMedia<bool>('chat.fluffy.compress_media', true),
+  groupAsAlbum<bool>('chat.fluffy.group_as_album', true);
 
   final String key;
   final T defaultValue;

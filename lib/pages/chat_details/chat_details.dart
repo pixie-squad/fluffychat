@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import 'package:collection/collection.dart';
@@ -13,6 +15,7 @@ import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
+import 'package:fluffychat/widgets/image_crop_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 
 class ChatDetails extends StatefulWidget {
@@ -121,7 +124,7 @@ class ChatDetailsController extends State<ChatDetails> {
       );
       return;
     }
-    MatrixFile file;
+    Uint8List rawBytes;
     if (PlatformInfos.isMobile) {
       final result = await ImagePicker().pickImage(
         source: action == AvatarAction.camera
@@ -130,7 +133,7 @@ class ChatDetailsController extends State<ChatDetails> {
         imageQuality: 50,
       );
       if (result == null) return;
-      file = MatrixFile(bytes: await result.readAsBytes(), name: result.path);
+      rawBytes = await result.readAsBytes();
     } else {
       final picked = await selectFiles(
         context,
@@ -139,11 +142,17 @@ class ChatDetailsController extends State<ChatDetails> {
       );
       final pickedFile = picked.firstOrNull;
       if (pickedFile == null) return;
-      file = MatrixFile(
-        bytes: await pickedFile.readAsBytes(),
-        name: pickedFile.name,
-      );
+      rawBytes = await pickedFile.readAsBytes();
     }
+
+    if (!mounted) return;
+    final croppedBytes = await showImageCropDialog(
+      context: context,
+      imageBytes: rawBytes,
+    );
+    if (croppedBytes == null || !mounted) return;
+
+    final file = MatrixFile(bytes: croppedBytes, name: 'avatar.png');
     await showFutureLoadingDialog(
       context: context,
       future: () => room!.setAvatar(file),
