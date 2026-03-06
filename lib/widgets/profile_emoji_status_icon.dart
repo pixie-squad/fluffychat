@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/custom_emoji_catalog.dart';
 import 'package:fluffychat/utils/profile_card_fields.dart';
+import 'package:fluffychat/widgets/custom_emoji_media.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 
 class ProfileEmojiStatusIcon extends StatefulWidget {
@@ -61,7 +63,8 @@ class _ProfileEmojiStatusIconState extends State<ProfileEmojiStatusIcon> {
   @override
   void didUpdateWidget(ProfileEmojiStatusIcon oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.userId != widget.userId || oldWidget.client != widget.client) {
+    if (oldWidget.userId != widget.userId ||
+        oldWidget.client != widget.client) {
       _future = profileEmojiStatusCache.get(widget.client, widget.userId);
     }
   }
@@ -79,6 +82,11 @@ class _ProfileEmojiStatusIconState extends State<ProfileEmojiStatusIcon> {
         if (emojiUri == null && !widget.showPlaceholder) {
           return const SizedBox.shrink();
         }
+        final emojiEntry = emojiUri == null
+            ? null
+            : CustomEmojiCatalog.fromClient(
+                widget.client,
+              ).resolveByMxc(emojiUri);
 
         final child = SizedBox(
           width: widget.size,
@@ -87,14 +95,26 @@ class _ProfileEmojiStatusIconState extends State<ProfileEmojiStatusIcon> {
               ? widget.placeholder ?? const SizedBox.shrink()
               : ClipRRect(
                   borderRadius: borderRadius,
-                  child: MxcImage(
-                    key: ValueKey(emojiUri),
-                    uri: emojiUri,
-                    width: widget.size,
-                    height: widget.size,
-                    fit: BoxFit.cover,
-                    isThumbnail: false,
-                  ),
+                  child: emojiEntry == null
+                      ? MxcImage(
+                          key: ValueKey(emojiUri),
+                          uri: emojiUri,
+                          width: widget.size,
+                          height: widget.size,
+                          fit: BoxFit.cover,
+                          isThumbnail: false,
+                        )
+                      : CustomEmojiMedia(
+                          key: ValueKey(emojiUri),
+                          client: widget.client,
+                          fallbackMxc: emojiUri,
+                          metadata: emojiEntry.metadata,
+                          fallbackEmoji: emojiEntry.primaryFallbackEmoji,
+                          width: widget.size,
+                          height: widget.size,
+                          fit: BoxFit.cover,
+                          isThumbnail: false,
+                        ),
                 ),
         );
 
@@ -112,7 +132,8 @@ class _ProfileEmojiStatusIconState extends State<ProfileEmojiStatusIcon> {
           );
         }
 
-        final tooltipText = widget.tooltip ?? L10n.of(context).profileEmojiStatus;
+        final tooltipText =
+            widget.tooltip ?? L10n.of(context).profileEmojiStatus;
         return Tooltip(message: tooltipText, child: output);
       },
     );

@@ -10,6 +10,7 @@ Future<List<XFile>> selectFiles(
   BuildContext context, {
   String? title,
   FileType type = FileType.any,
+  List<String>? allowedExtensions,
   bool allowMultiple = false,
 }) async {
   final result = await AppLock.of(context).pauseWhile(
@@ -19,6 +20,7 @@ Future<List<XFile>> selectFiles(
         compressionQuality: 0,
         allowMultiple: allowMultiple,
         type: type,
+        allowedExtensions: allowedExtensions,
       ),
     ),
   );

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'package:fluffychat/config/emoji_rendering.dart';
 import 'package:fluffychat/config/setting_keys.dart';
 import 'app_config.dart';
 
@@ -52,7 +51,6 @@ abstract class FluffyThemes {
       useMaterial3: true,
       brightness: brightness,
       colorScheme: colorScheme,
-      fontFamilyFallback: emojiFallbackFamilies,
       dividerColor: brightness == Brightness.dark
           ? colorScheme.surfaceContainerHighest
           : colorScheme.surfaceContainer,

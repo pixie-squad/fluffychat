@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 
-import 'package:fluffychat/config/emoji_rendering.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 
@@ -22,7 +21,6 @@ Future<String?> showCustomReactionPicker(BuildContext context) {
           config: Config(
             locale: Localizations.localeOf(context),
             checkPlatformCompatibility: false,
-            emojiTextStyle: appleEmojiTextStyle,
             emojiViewConfig: const EmojiViewConfig(
               backgroundColor: Colors.transparent,
             ),

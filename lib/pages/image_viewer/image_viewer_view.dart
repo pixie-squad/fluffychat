@@ -4,7 +4,9 @@ import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/image_viewer/video_player.dart';
+import 'package:fluffychat/utils/custom_emoji_metadata.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
+import 'package:fluffychat/widgets/custom_emoji_media.dart';
 import 'package:fluffychat/widgets/hover_builder.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'image_viewer.dart';
@@ -13,6 +15,58 @@ class ImageViewerView extends StatelessWidget {
   final ImageViewerController controller;
 
   const ImageViewerView(this.controller, {super.key});
+
+  Uri? _stickerMxcUrl(Event event) {
+    if (event.messageType != MessageTypes.Sticker) return null;
+    final uri = Uri.tryParse(event.content.tryGet<String>('url') ?? '');
+    return (uri?.scheme == 'mxc') ? uri : null;
+  }
+
+  CustomEmojiMeta? _stickerMeta(Event event) {
+    final mxcUrl = _stickerMxcUrl(event);
+    if (mxcUrl == null) return null;
+    final imageJson = <String, Object?>{
+      'url': mxcUrl.toString(),
+      if (event.infoMap.isNotEmpty)
+        'info': Map<String, Object?>.from(event.infoMap),
+    };
+    final rawMeta = event.content.tryGetMap<String, Object?>(
+      customEmojiMetaKey,
+    );
+    if (rawMeta != null) {
+      imageJson[customEmojiMetaKey] = Map<String, Object?>.from(rawMeta);
+    }
+    return CustomEmojiMeta.fromImage(ImagePackImageContent.fromJson(imageJson));
+  }
+
+  Widget _buildMedia(BuildContext context, Event event) {
+    final mxcUrl = _stickerMxcUrl(event);
+    final meta = _stickerMeta(event);
+    final viewport = MediaQuery.sizeOf(context);
+    if (mxcUrl != null &&
+        meta != null &&
+        meta.media.primary != CustomEmojiMediaKind.image) {
+      return CustomEmojiMedia(
+        client: event.room.client,
+        fallbackMxc: mxcUrl,
+        metadata: meta,
+        fallbackEmoji: meta.primaryFallbackEmoji ?? event.body,
+        width: viewport.width,
+        height: viewport.height,
+        fit: BoxFit.contain,
+        autoplay: true,
+        isThumbnail: false,
+      );
+    }
+
+    return MxcImage(
+      key: ValueKey(event.eventId),
+      event: event,
+      fit: BoxFit.contain,
+      isThumbnail: false,
+      animated: true,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -105,13 +159,7 @@ class ImageViewerView extends StatelessWidget {
                               child: GestureDetector(
                                 // Ignore taps to not go back here:
                                 onTap: () {},
-                                child: MxcImage(
-                                  key: ValueKey(event.eventId),
-                                  event: event,
-                                  fit: BoxFit.contain,
-                                  isThumbnail: false,
-                                  animated: true,
-                                ),
+                                child: _buildMedia(context, event),
                               ),
                             ),
                           ),

@@ -1,16 +1,24 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'package:cross_file/cross_file.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' hide Client;
 import 'package:matrix/matrix.dart';
+import 'package:mime/mime.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:slugify/slugify.dart';
+import 'package:video_compress/video_compress.dart';
 
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/client_manager.dart';
+import 'package:fluffychat/utils/custom_emoji_metadata.dart';
 import 'package:fluffychat/utils/file_selector.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_file_extension.dart';
+import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
@@ -38,7 +46,19 @@ class EmotesSettingsController extends State<EmotesSettings> {
     final room = this.room;
     if (room == null) return null;
     final keys = room.states['im.ponies.room_emotes']?.keys.toList() ?? [];
-    keys.sort();
+    keys.sort((a, b) {
+      final eventA = room.getState('im.ponies.room_emotes', a);
+      final eventB = room.getState('im.ponies.room_emotes', b);
+      final orderA = eventA == null
+          ? 0
+          : getCustomEmojiPackOrder(eventA.parsedImagePackContent);
+      final orderB = eventB == null
+          ? 0
+          : getCustomEmojiPackOrder(eventB.parsedImagePackContent);
+      final orderCompare = orderA.compareTo(orderB);
+      if (orderCompare != 0) return orderCompare;
+      return a.toLowerCase().compareTo(b.toLowerCase());
+    });
     return keys;
   }
 
@@ -49,6 +69,9 @@ class EmotesSettingsController extends State<EmotesSettings> {
         ? Matrix.of(context).client.getRoomById(widget.roomId!)
         : null;
     setStateKey(packKeys?.firstOrNull, reset: false);
+    if (room == null) {
+      packOrderController.text = getCustomEmojiPackOrder(_getPack()).toString();
+    }
   }
 
   void setStateKey(String? key, {reset = true}) {
@@ -62,6 +85,9 @@ class EmotesSettingsController extends State<EmotesSettings> {
         eventPack?.tryGet<String>('display_name') ?? '';
     packAttributionController.text =
         eventPack?.tryGet<String>('attribution') ?? '';
+    packOrderController.text = event == null
+        ? '0'
+        : getCustomEmojiPackOrder(event.parsedImagePackContent).toString();
     if (reset) resetAction();
   }
 
@@ -154,6 +180,8 @@ class EmotesSettingsController extends State<EmotesSettings> {
   final TextEditingController packAttributionController =
       TextEditingController();
 
+  final TextEditingController packOrderController = TextEditingController();
+
   void removeImageAction(String oldImageCode) => setState(() {
     pack!.images.remove(oldImageCode);
     showSave = true;
@@ -226,6 +254,155 @@ class EmotesSettingsController extends State<EmotesSettings> {
     });
   }
 
+  void submitPackOrderAction() {
+    if (readonly) return;
+    final order = int.tryParse(packOrderController.text.trim()) ?? 0;
+    setState(() {
+      _pack = applyCustomEmojiPackOrder(pack!, order);
+      showSave = true;
+    });
+  }
+
+  CustomEmojiMeta imageMetadata(String imageCode) =>
+      CustomEmojiMeta.fromImage(pack!.images[imageCode]!);
+
+  void submitAliasesAction(String imageCode, String value) {
+    _updateImageMeta(imageCode, (current) {
+      final aliases = value
+          .split(',')
+          .map((part) => part.trim())
+          .where((part) => part.isNotEmpty)
+          .map((alias) {
+            if (alias.startsWith(':')) alias = alias.substring(1);
+            if (alias.endsWith(':')) {
+              alias = alias.substring(0, alias.length - 1);
+            }
+            return alias;
+          })
+          .where((alias) => alias.isNotEmpty)
+          .toSet()
+          .toList();
+      aliases.sort();
+      return CustomEmojiMeta(
+        aliases: aliases,
+        emojis: current.emojis,
+        order: current.order,
+        media: current.media,
+      );
+    });
+  }
+
+  void submitFallbackEmojisAction(String imageCode, String value) {
+    _updateImageMeta(imageCode, (current) {
+      final emojis = value
+          .split(',')
+          .map((part) => part.trim())
+          .where((part) => part.isNotEmpty)
+          .toSet()
+          .toList();
+      return CustomEmojiMeta(
+        aliases: current.aliases,
+        emojis: emojis,
+        order: current.order,
+        media: current.media,
+      );
+    });
+  }
+
+  void submitItemOrderAction(String imageCode, String value) {
+    final parsed = int.tryParse(value.trim()) ?? 0;
+    _updateImageMeta(imageCode, (current) {
+      return CustomEmojiMeta(
+        aliases: current.aliases,
+        emojis: current.emojis,
+        order: parsed,
+        media: current.media,
+      );
+    });
+  }
+
+  Future<void> editMediaSourcesAction(String imageCode) async {
+    final metadata = imageMetadata(imageCode);
+    final updated = await showTextInputDialog(
+      context: context,
+      title: L10n.of(context).advancedConfigs,
+      initialText: const JsonEncoder.withIndent(
+        '  ',
+      ).convert(metadata.media.toJson()),
+      minLines: 5,
+      maxLines: 12,
+      keyboardType: TextInputType.multiline,
+      validator: (input) {
+        try {
+          final decoded = jsonDecode(input);
+          if (decoded is! Map<String, dynamic>) return 'Invalid JSON object';
+          final rawSources = decoded.tryGetList<Object?>('sources');
+          if (rawSources == null || rawSources.isEmpty) {
+            return 'sources must not be empty';
+          }
+          return null;
+        } catch (_) {
+          return 'Invalid JSON';
+        }
+      },
+    );
+    if (updated == null) return;
+
+    final decoded = jsonDecode(updated);
+    if (decoded is! Map<String, dynamic>) return;
+    final map = Map<String, Object?>.from(decoded);
+
+    final loop = map.tryGet<bool>('loop') ?? true;
+    final sourcesRaw = map.tryGetList<Object?>('sources') ?? const [];
+    final sources = <CustomEmojiMediaSource>[];
+    for (final source in sourcesRaw) {
+      if (source is! Map) continue;
+      try {
+        sources.add(
+          CustomEmojiMediaSource.fromJson(Map<String, Object?>.from(source)),
+        );
+      } catch (_) {}
+    }
+    if (sources.isEmpty) return;
+
+    final requestedPrimary = customEmojiMediaKindFromString(
+      map.tryGet<String>('primary'),
+    );
+    final primary =
+        requestedPrimary != null &&
+            sources.any((source) => source.kind == requestedPrimary)
+        ? requestedPrimary
+        : sources.first.kind;
+
+    _updateImageMeta(imageCode, (current) {
+      return CustomEmojiMeta(
+        aliases: current.aliases,
+        emojis: current.emojis,
+        order: current.order,
+        media: CustomEmojiMediaDescriptor(
+          loop: loop,
+          primary: primary,
+          sources: sources,
+        ),
+      );
+    });
+  }
+
+  void _updateImageMeta(
+    String imageCode,
+    CustomEmojiMeta Function(CustomEmojiMeta current) update,
+  ) {
+    if (readonly) return;
+    final image = pack!.images[imageCode];
+    if (image == null) return;
+    final current = CustomEmojiMeta.fromImage(image);
+    final next = update(current);
+    setState(() {
+      pack!.images[imageCode] = applyCustomEmojiMeta(image, next);
+      showSave = true;
+    });
+  }
+
   bool isGloballyActive(Client? client) =>
       room != null &&
       client!.accountData['im.ponies.emote_rooms']?.content
@@ -241,6 +418,7 @@ class EmotesSettingsController extends State<EmotesSettings> {
   void resetAction() {
     setState(() {
       _pack = _getPack();
+      packOrderController.text = getCustomEmojiPackOrder(_pack!).toString();
       showSave = false;
     });
   }
@@ -248,6 +426,7 @@ class EmotesSettingsController extends State<EmotesSettings> {
   Future<void> createImagePack() async {
     final room = this.room;
     if (room == null) throw Exception('Cannot create image pack without room');
+    if (readonly) return;
 
     final input = await showTextInputDialog(
       context: context,
@@ -259,9 +438,15 @@ class EmotesSettingsController extends State<EmotesSettings> {
     if (name == null || name.isEmpty) return;
     if (!mounted) return;
 
-    final keyName = name.toLowerCase().replaceAll(' ', '_');
+    final keyName = slugify(name, delimiter: '_');
+    if (keyName.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(L10n.of(context).emoteInvalid)));
+      return;
+    }
 
-    if (packKeys?.contains(name) ?? false) {
+    if (packKeys?.contains(keyName) ?? false) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(L10n.of(context).stickerPackNameAlreadyExists)),
       );
@@ -281,10 +466,11 @@ class EmotesSettingsController extends State<EmotesSettings> {
       ),
     );
     if (!mounted) return;
-    setState(() {});
     await room.client.oneShotSync();
     if (!mounted) return;
-    setState(() {});
+    setState(() {
+      setStateKey(keyName);
+    });
   }
 
   Future<void> saveAction() async {
@@ -294,10 +480,61 @@ class EmotesSettingsController extends State<EmotesSettings> {
     });
   }
 
+  Future<void> sharePackToRoomAction() async {
+    final client = Matrix.of(context).client;
+    final target = await showTextInputDialog(
+      context: context,
+      title: 'Share pack to room',
+      hintText: '#room:example.org / !roomId:example.org',
+      okLabel: L10n.of(context).share,
+      cancelLabel: L10n.of(context).cancel,
+    );
+    final roomIdentifier = target?.trim();
+    if (roomIdentifier == null || roomIdentifier.isEmpty) return;
+
+    final targetRoom = roomIdentifier.sigil == '!'
+        ? client.getRoomById(roomIdentifier)
+        : client.getRoomByAlias(roomIdentifier);
+    if (targetRoom == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Room not found in current account')),
+      );
+      return;
+    }
+
+    final baseStateKey = stateKey;
+    final displayName = pack?.pack.displayName?.trim().isNotEmpty == true
+        ? pack!.pack.displayName!.trim()
+        : (baseStateKey?.trim().isNotEmpty == true
+              ? baseStateKey!.trim()
+              : 'pack');
+    final shareStateKey = slugify(displayName);
+
+    await showFutureLoadingDialog(
+      context: context,
+      future: () => client.setRoomStateWithKey(
+        targetRoom.id,
+        'im.ponies.room_emotes',
+        shareStateKey,
+        pack!.toJson(),
+      ),
+    );
+  }
+
   Future<void> createStickers() async {
     final pickedFiles = await selectFiles(
       context,
-      type: FileType.image,
+      type: FileType.custom,
+      allowedExtensions: const [
+        'png',
+        'jpg',
+        'jpeg',
+        'webp',
+        'mp4',
+        'webm',
+        'json',
+        'tgs',
+      ],
       allowMultiple: true,
     );
     if (pickedFiles.isEmpty) return;
@@ -308,38 +545,10 @@ class EmotesSettingsController extends State<EmotesSettings> {
       futureWithProgress: (setProgress) async {
         for (final (i, pickedFile) in pickedFiles.indexed) {
           setProgress(i / pickedFiles.length);
-          var file = MatrixImageFile(
-            bytes: await pickedFile.readAsBytes(),
-            name: pickedFile.name,
-          );
-          file =
-              await file.generateThumbnail(
-                nativeImplementations: ClientManager.nativeImplementations,
-              ) ??
-              file;
-          final uri = await Matrix.of(context).client.uploadContent(
-            file.bytes,
-            filename: file.name,
-            contentType: file.mimeType,
-          );
-
+          final imageCode = pickedFile.name.split('.').first;
+          final image = await uploadPackAssetFile(pickedFile);
           setState(() {
-            final info = <String, dynamic>{...file.info};
-            // normalize width / height to 256, required for stickers
-            if (info['w'] is int && info['h'] is int) {
-              final ratio = info['w'] / info['h'];
-              if (info['w'] > info['h']) {
-                info['w'] = 256;
-                info['h'] = (256.0 / ratio).round();
-              } else {
-                info['h'] = 256;
-                info['w'] = (ratio * 256.0).round();
-              }
-            }
-            final imageCode = pickedFile.name.split('.').first;
-            pack!.images[imageCode] = ImagePackImageContent.fromJson(
-              <String, dynamic>{'url': uri.toString(), 'info': info},
-            );
+            pack!.images[imageCode] = image;
           });
         }
       },
@@ -348,6 +557,184 @@ class EmotesSettingsController extends State<EmotesSettings> {
     setState(() {
       showSave = true;
     });
+  }
+
+  Future<ImagePackImageContent> uploadPackAssetFile(XFile pickedFile) async {
+    final bytes = await pickedFile.readAsBytes();
+    return uploadPackAssetBytes(
+      bytes: bytes,
+      filename: pickedFile.name,
+      mimeType: pickedFile.mimeType ?? lookupMimeType(pickedFile.path),
+      sourcePath: pickedFile.path,
+    );
+  }
+
+  Future<ImagePackImageContent> uploadPackAssetBytes({
+    required Uint8List bytes,
+    required String filename,
+    String? mimeType,
+    String? sourcePath,
+  }) async {
+    var resolvedMimeType =
+        mimeType ?? lookupMimeType(filename) ?? 'application/octet-stream';
+    var resolvedFilename = filename;
+    var sanitizedBytes = bytes;
+    final initialMediaKind = inferCustomEmojiMediaKind(
+      mimetype: resolvedMimeType,
+      uri: Uri.parse(resolvedFilename),
+    );
+    if (initialMediaKind == CustomEmojiMediaKind.webm ||
+        initialMediaKind == CustomEmojiMediaKind.mp4) {
+      final sanitized = await _stripAudioTrackFromStickerMedia(
+        bytes: bytes,
+        filename: filename,
+        mimeType: resolvedMimeType,
+        sourcePath: sourcePath,
+      );
+      if (sanitized != null) {
+        sanitizedBytes = sanitized.bytes;
+        resolvedFilename = sanitized.filename;
+        resolvedMimeType = sanitized.mimeType;
+      }
+    }
+    final mediaKind = inferCustomEmojiMediaKind(
+      mimetype: resolvedMimeType,
+      uri: Uri.parse(resolvedFilename),
+    );
+
+    MatrixFile uploadFile;
+    Map<String, Object?> info;
+
+    if (mediaKind == CustomEmojiMediaKind.image) {
+      var imageFile = MatrixImageFile(
+        bytes: sanitizedBytes,
+        name: resolvedFilename,
+      );
+      imageFile =
+          await imageFile.generateThumbnail(
+            nativeImplementations: ClientManager.nativeImplementations,
+          ) ??
+          imageFile;
+      uploadFile = imageFile;
+      info = <String, Object?>{...imageFile.info};
+
+      if (info['w'] is int && info['h'] is int) {
+        final ratio = (info['w'] as int) / (info['h'] as int);
+        if ((info['w'] as int) > (info['h'] as int)) {
+          info['w'] = 256;
+          info['h'] = (256.0 / ratio).round();
+        } else {
+          info['h'] = 256;
+          info['w'] = (ratio * 256.0).round();
+        }
+      }
+    } else {
+      uploadFile = MatrixFile(
+        bytes: sanitizedBytes,
+        name: resolvedFilename,
+        mimeType: resolvedMimeType,
+      ).detectFileType;
+      info = <String, Object?>{
+        ...uploadFile.info,
+        'mimetype': resolvedMimeType,
+        'size': sanitizedBytes.length,
+      };
+    }
+
+    final uri = await Matrix.of(context).client.uploadContent(
+      uploadFile.bytes,
+      filename: uploadFile.name,
+      contentType: uploadFile.mimeType,
+    );
+
+    final image = ImagePackImageContent.fromJson(<String, Object?>{
+      'url': uri.toString(),
+      if (info.isNotEmpty) 'info': info,
+    });
+    final meta = CustomEmojiMeta(
+      aliases: const [],
+      emojis: const [],
+      order: 0,
+      media: CustomEmojiMediaDescriptor(
+        loop: true,
+        primary: mediaKind,
+        sources: [
+          CustomEmojiMediaSource(
+            kind: mediaKind,
+            url: uri,
+            mimetype: uploadFile.mimeType,
+          ),
+        ],
+      ),
+    );
+    return applyCustomEmojiMeta(image, meta);
+  }
+
+  Future<_SanitizedStickerMedia?> _stripAudioTrackFromStickerMedia({
+    required Uint8List bytes,
+    required String filename,
+    required String mimeType,
+    String? sourcePath,
+  }) async {
+    if (kIsWeb || !PlatformInfos.isMobile) return null;
+
+    final isVideoMime = mimeType.toLowerCase().startsWith('video/');
+    if (!isVideoMime) return null;
+
+    var inputPath = sourcePath;
+    final createdTempSource = inputPath == null || inputPath.isEmpty;
+
+    try {
+      if (createdTempSource) {
+        final tempDir = await getTemporaryDirectory();
+        final fallbackExt = mimeType.toLowerCase().contains('webm')
+            ? 'webm'
+            : 'mp4';
+        final ext = filename.contains('.')
+            ? filename.split('.').last
+            : fallbackExt;
+        inputPath =
+            '${tempDir.path}/emoji_strip_${DateTime.now().microsecondsSinceEpoch}.$ext';
+        await XFile.fromData(
+          bytes,
+          mimeType: mimeType,
+          name: filename,
+        ).saveTo(inputPath);
+      }
+
+      final mediaInfo = await VideoCompress.compressVideo(
+        inputPath,
+        deleteOrigin: createdTempSource,
+        includeAudio: false,
+      );
+      final outputPath = mediaInfo?.path;
+      if (outputPath == null || outputPath.isEmpty) return null;
+
+      final strippedBytes = await XFile(outputPath).readAsBytes();
+      if (strippedBytes.isEmpty) return null;
+
+      final sanitizedFilename = outputPath.split(RegExp(r'[\\/]')).last;
+      final sanitizedMimeType =
+          lookupMimeType(outputPath) ?? lookupMimeType(sanitizedFilename);
+
+      Logs().v('Removed audio track from emoji/sticker media "$filename".');
+      return _SanitizedStickerMedia(
+        bytes: strippedBytes,
+        filename: sanitizedFilename.isEmpty ? filename : sanitizedFilename,
+        mimeType: sanitizedMimeType ?? mimeType,
+      );
+    } catch (e, s) {
+      Logs().w(
+        'Unable to strip audio from emoji/sticker media "$filename".',
+        e,
+        s,
+      );
+      return null;
+    } finally {
+      try {
+        await VideoCompress.deleteAllCache();
+      } catch (_) {}
+    }
   }
 
   @override
@@ -406,4 +793,16 @@ class EmotesSettingsController extends State<EmotesSettings> {
       },
     );
   }
+}
+
+class _SanitizedStickerMedia {
+  final Uint8List bytes;
+  final String filename;
+  final String mimeType;
+
+  const _SanitizedStickerMedia({
+    required this.bytes,
+    required this.filename,
+    required this.mimeType,
+  });
 }

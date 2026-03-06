@@ -5,8 +5,10 @@ import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/setting_keys.dart';
+import 'package:fluffychat/utils/custom_emoji_metadata.dart';
 import 'package:fluffychat/utils/file_description.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
+import 'package:fluffychat/widgets/custom_emoji_media.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import '../../../widgets/blur_hash.dart';
 
@@ -93,20 +95,7 @@ class ImageBubble extends StatelessWidget {
           child: InkWell(
             onTap: onTap,
             borderRadius: borderRadius,
-            child: Hero(
-              tag: event.eventId,
-              child: MxcImage(
-                event: event,
-                width: width,
-                height: height,
-                fit: fit,
-                animated: animated,
-                isThumbnail: thumbnailOnly,
-                placeholder: event.messageType == MessageTypes.Sticker
-                    ? null
-                    : _buildPlaceholder,
-              ),
-            ),
+            child: Hero(tag: event.eventId, child: _buildMedia()),
           ),
         ),
         if (fileDescription != null && textColor != null)
@@ -138,5 +127,61 @@ class ImageBubble extends StatelessWidget {
           ),
       ],
     );
+  }
+
+  Widget _buildMedia() {
+    final stickerMeta = _stickerMetadata();
+    final stickerUrl = _stickerMxcUrl();
+    if (stickerMeta != null &&
+        stickerUrl != null &&
+        stickerMeta.media.primary != CustomEmojiMediaKind.image) {
+      return CustomEmojiMedia(
+        client: event.room.client,
+        fallbackMxc: stickerUrl,
+        metadata: stickerMeta,
+        fallbackEmoji: stickerMeta.primaryFallbackEmoji ?? event.body,
+        width: width,
+        height: height,
+        fit: fit,
+        isThumbnail: thumbnailOnly,
+      );
+    }
+
+    return MxcImage(
+      event: event,
+      width: width,
+      height: height,
+      fit: fit,
+      animated: animated,
+      isThumbnail: thumbnailOnly,
+      placeholder: event.messageType == MessageTypes.Sticker
+          ? null
+          : _buildPlaceholder,
+    );
+  }
+
+  Uri? _stickerMxcUrl() {
+    if (event.messageType != MessageTypes.Sticker) return null;
+    final url = Uri.tryParse(event.content.tryGet<String>('url') ?? '');
+    return (url?.scheme == 'mxc') ? url : null;
+  }
+
+  CustomEmojiMeta? _stickerMetadata() {
+    final mxcUrl = _stickerMxcUrl();
+    if (mxcUrl == null) return null;
+
+    final imageJson = <String, Object?>{
+      'url': mxcUrl.toString(),
+      if (event.infoMap.isNotEmpty)
+        'info': Map<String, Object?>.from(event.infoMap),
+    };
+    final rawMeta = event.content.tryGetMap<String, Object?>(
+      customEmojiMetaKey,
+    );
+    if (rawMeta != null) {
+      imageJson[customEmojiMetaKey] = Map<String, Object?>.from(rawMeta);
+    }
+    final image = ImagePackImageContent.fromJson(imageJson);
+    return CustomEmojiMeta.fromImage(image);
   }
 }

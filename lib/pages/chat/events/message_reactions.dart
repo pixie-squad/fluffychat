@@ -4,7 +4,9 @@ import 'package:collection/collection.dart' show IterableExtension;
 import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/config/app_config.dart';
+import 'package:fluffychat/utils/custom_emoji_catalog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
+import 'package:fluffychat/widgets/custom_emoji_media.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
@@ -20,6 +22,10 @@ class MessageReactions extends StatelessWidget {
     final allReactionEvents = event.aggregatedEvents(
       timeline,
       RelationshipTypes.reaction,
+    );
+    final customEmojiCatalog = CustomEmojiCatalog.fromRoom(
+      event.room,
+      usage: ImagePackUsage.emoticon,
     );
     final reactionMap = <String, _ReactionEntry>{};
     final client = Matrix.of(context).client;
@@ -54,6 +60,9 @@ class MessageReactions extends StatelessWidget {
         ...reactionList.map(
           (r) => _Reaction(
             reactionKey: r.key,
+            customEntry: r.key.startsWith('mxc://')
+                ? customEmojiCatalog.resolveByMxc(Uri.parse(r.key))
+                : null,
             count: r.count,
             reacted: r.reacted,
             onTap: () {
@@ -95,6 +104,7 @@ class MessageReactions extends StatelessWidget {
 
 class _Reaction extends StatelessWidget {
   final String reactionKey;
+  final CustomEmojiCatalogEntry? customEntry;
   final int count;
   final bool? reacted;
   final void Function()? onTap;
@@ -102,6 +112,7 @@ class _Reaction extends StatelessWidget {
 
   const _Reaction({
     required this.reactionKey,
+    this.customEntry,
     required this.count,
     required this.reacted,
     required this.onTap,
@@ -114,16 +125,27 @@ class _Reaction extends StatelessWidget {
 
     Widget content;
     if (reactionKey.startsWith('mxc://')) {
+      final customEntry = this.customEntry;
       content = Row(
         mainAxisSize: .min,
         children: <Widget>[
-          MxcImage(
-            uri: Uri.parse(reactionKey),
-            width: 20,
-            height: 20,
-            animated: false,
-            isThumbnail: false,
-          ),
+          customEntry == null
+              ? MxcImage(
+                  uri: Uri.parse(reactionKey),
+                  width: 20,
+                  height: 20,
+                  animated: false,
+                  isThumbnail: false,
+                )
+              : CustomEmojiMedia(
+                  client: Matrix.of(context).client,
+                  fallbackMxc: customEntry.primaryMxc,
+                  metadata: customEntry.metadata,
+                  fallbackEmoji: customEntry.primaryFallbackEmoji,
+                  width: 20,
+                  height: 20,
+                  isThumbnail: false,
+                ),
           if (count > 1) ...[
             const SizedBox(width: 4),
             Text(

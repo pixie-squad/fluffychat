@@ -53,6 +53,7 @@ dependencies:
   just_audio: ^0.10.5
   latlong2: ^0.9.1
   linkify: ^5.0.0
+  lottie: ^3.3.2
   matrix: ^6.1.1
   mime: ^2.0.0
   native_imaging: ^0.4.0
@@ -87,6 +88,9 @@ dependencies:
   wakelock_plus: ^1.3.3
   webrtc_interface: ^1.3.0
   crop_your_image: ^2.0.0
+  video_player_media_kit: ^2.0.0
+  media_kit_libs_windows_video: ^1.0.11
+  media_kit_libs_linux: ^1.2.1
 
 dev_dependencies:
   dart_code_linter: ^3.2.1
@@ -116,10 +120,6 @@ flutter:
     - assets/
     - assets/sounds/
     - assets/vodozemac/
-  fonts:
-    - family: AppleColorEmoji
-      fonts:
-        - asset: assets/fonts/AppleColorEmoji.ttf
 
 # Guidelines for adding a dependency override:
 # 1. Don't do it if you can avoid it or fix it upstream in a manageable time

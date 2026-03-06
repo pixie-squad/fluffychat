@@ -14,6 +14,7 @@ import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/client_download_content_extension.dart';
 import 'package:fluffychat/utils/client_manager.dart';
+import 'package:fluffychat/utils/custom_emoji_catalog.dart';
 import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/file_selector.dart';
 import 'package:fluffychat/utils/fluffy_share.dart';
@@ -24,6 +25,7 @@ import 'package:fluffychat/utils/profile_card_fields.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_modal_action_popup.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/avatar.dart';
+import 'package:fluffychat/widgets/custom_emoji_media.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import 'package:fluffychat/widgets/emoji_status_sticker_picker.dart';
 import 'package:fluffychat/widgets/presence_builder.dart';
@@ -1088,10 +1090,7 @@ class _UserDialogState extends State<UserDialog> {
       builder: (context) => Dialog(
         clipBehavior: Clip.hardEdge,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(
-            maxWidth: 400,
-            maxHeight: 500,
-          ),
+          constraints: const BoxConstraints(maxWidth: 400, maxHeight: 500),
           child: EmojiStatusStickerPicker(
             client: _client,
             onSelected: (sticker) {
@@ -1163,6 +1162,33 @@ class _UserDialogState extends State<UserDialog> {
         await _removeEmojiStatus();
         return;
     }
+  }
+
+  Widget _buildEmojiStatusVisual(
+    Uri uri, {
+    required double size,
+    required BoxFit fit,
+  }) {
+    final entry = CustomEmojiCatalog.fromClient(_client).resolveByMxc(uri);
+    if (entry == null) {
+      return MxcImage(
+        uri: uri,
+        width: size,
+        height: size,
+        fit: fit,
+        isThumbnail: false,
+      );
+    }
+    return CustomEmojiMedia(
+      client: _client,
+      fallbackMxc: uri,
+      metadata: entry.metadata,
+      fallbackEmoji: entry.primaryFallbackEmoji,
+      width: size,
+      height: size,
+      fit: fit,
+      isThumbnail: false,
+    );
   }
 
   Widget _buildStatusPill({
@@ -1614,13 +1640,10 @@ class _UserDialogState extends State<UserDialog> {
                                           : ClipRRect(
                                               borderRadius:
                                                   BorderRadius.circular(999),
-                                              child: MxcImage(
-                                                uri: _profileFields
-                                                    .emojiStatusMxc,
-                                                width: 20,
-                                                height: 20,
+                                              child: _buildEmojiStatusVisual(
+                                                _profileFields.emojiStatusMxc!,
+                                                size: 20,
                                                 fit: BoxFit.cover,
-                                                isThumbnail: false,
                                               ),
                                             ),
                                     ),
@@ -1747,12 +1770,10 @@ class _UserDialogState extends State<UserDialog> {
                                         borderRadius: BorderRadius.circular(
                                           999,
                                         ),
-                                        child: MxcImage(
-                                          uri: emojiStatusUri,
-                                          width: 16 * scale,
-                                          height: 16 * scale,
+                                        child: _buildEmojiStatusVisual(
+                                          emojiStatusUri,
+                                          size: 16 * scale,
                                           fit: BoxFit.cover,
-                                          isThumbnail: false,
                                         ),
                                       ),
                                     ],

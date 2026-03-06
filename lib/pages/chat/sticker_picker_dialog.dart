@@ -4,8 +4,9 @@ import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/l10n/l10n.dart';
+import 'package:fluffychat/utils/custom_emoji_metadata.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
+import 'package:fluffychat/widgets/custom_emoji_media.dart';
 import '../../widgets/avatar.dart';
 
 class StickerPickerDialog extends StatefulWidget {
@@ -30,12 +31,26 @@ class StickerPickerDialogState extends State<StickerPickerDialog> {
     final theme = Theme.of(context);
 
     final stickerPacks = widget.room.getImagePacks(ImagePackUsage.sticker);
-    final packSlugs = stickerPacks.keys.toList();
+    final packSlugs = stickerPacks.keys.toList()
+      ..sort((a, b) {
+        final orderA = getCustomEmojiPackOrder(stickerPacks[a]!);
+        final orderB = getCustomEmojiPackOrder(stickerPacks[b]!);
+        final orderCompare = orderA.compareTo(orderB);
+        if (orderCompare != 0) return orderCompare;
+        return a.toLowerCase().compareTo(b.toLowerCase());
+      });
 
     // ignore: prefer_function_declarations_over_variables
     final packBuilder = (BuildContext context, int packIndex) {
       final pack = stickerPacks[packSlugs[packIndex]]!;
-      final filteredImagePackImageEntried = pack.images.entries.toList();
+      final filteredImagePackImageEntried = pack.images.entries.toList()
+        ..sort((a, b) {
+          final orderCompare = CustomEmojiMeta.fromImage(
+            a.value,
+          ).order.compareTo(CustomEmojiMeta.fromImage(b.value).order);
+          if (orderCompare != 0) return orderCompare;
+          return a.key.toLowerCase().compareTo(b.key.toLowerCase());
+        });
       if (searchFilter?.isNotEmpty ?? false) {
         filteredImagePackImageEntried.removeWhere(
           (e) =>
@@ -77,6 +92,7 @@ class StickerPickerDialogState extends State<StickerPickerDialog> {
             physics: const NeverScrollableScrollPhysics(),
             itemBuilder: (BuildContext context, int imageIndex) {
               final image = pack.images[imageKeys[imageIndex]]!;
+              final metadata = CustomEmojiMeta.fromImage(image);
               return Tooltip(
                 message: image.body ?? imageKeys[imageIndex],
                 child: InkWell(
@@ -93,12 +109,14 @@ class StickerPickerDialogState extends State<StickerPickerDialog> {
                   },
                   child: AbsorbPointer(
                     absorbing: true,
-                    child: MxcImage(
-                      uri: image.url,
+                    child: CustomEmojiMedia(
+                      client: widget.room.client,
+                      fallbackMxc: image.url,
+                      metadata: metadata,
+                      fallbackEmoji: metadata.primaryFallbackEmoji,
                       fit: BoxFit.contain,
                       width: 128,
                       height: 128,
-                      animated: true,
                       isThumbnail: false,
                     ),
                   ),

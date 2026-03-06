@@ -9,8 +9,10 @@ import 'package:html/parser.dart' as parser;
 import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/utils/code_highlight_theme.dart';
+import 'package:fluffychat/utils/custom_emoji_catalog.dart';
 import 'package:fluffychat/utils/event_checkbox_extension.dart';
 import 'package:fluffychat/widgets/avatar.dart';
+import 'package:fluffychat/widgets/custom_emoji_media.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
 import '../../../utils/url_launcher.dart';
@@ -26,7 +28,10 @@ class HtmlMessage extends StatelessWidget {
   final Set<Event>? checkboxCheckedEvents;
   final bool limitHeight;
 
-  const HtmlMessage({
+  late final CustomEmojiCatalog _customEmojiCatalog =
+      CustomEmojiCatalog.fromRoom(room, usage: ImagePackUsage.emoticon);
+
+  HtmlMessage({
     super.key,
     required this.html,
     required this.room,
@@ -385,17 +390,33 @@ class HtmlMessage extends StatelessWidget {
         const defaultDimension = 64.0;
         final actualWidth = width ?? height ?? defaultDimension;
         final actualHeight = height ?? width ?? defaultDimension;
+        final isEmoticon = node.attributes.containsKey('data-mx-emoticon');
+        final emoticonEntry = isEmoticon
+            ? _customEmojiCatalog.resolveByMxc(mxcUrl)
+            : null;
 
         return WidgetSpan(
           child: SizedBox(
             width: actualWidth,
             height: actualHeight,
-            child: MxcImage(
-              uri: mxcUrl,
-              width: actualWidth,
-              height: actualHeight,
-              isThumbnail: (actualWidth * actualHeight) > (256 * 256),
-            ),
+            child: emoticonEntry == null
+                ? MxcImage(
+                    uri: mxcUrl,
+                    width: actualWidth,
+                    height: actualHeight,
+                    isThumbnail: (actualWidth * actualHeight) > (256 * 256),
+                  )
+                : CustomEmojiMedia(
+                    client: room.client,
+                    fallbackMxc: emoticonEntry.primaryMxc,
+                    metadata: emoticonEntry.metadata,
+                    fallbackEmoji:
+                        emoticonEntry.primaryFallbackEmoji ??
+                        node.attributes['alt'],
+                    width: actualWidth,
+                    height: actualHeight,
+                    isThumbnail: (actualWidth * actualHeight) > (256 * 256),
+                  ),
           ),
         );
       case 'hr':

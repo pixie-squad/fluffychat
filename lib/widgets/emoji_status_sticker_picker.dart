@@ -5,9 +5,10 @@ import 'package:matrix/matrix.dart';
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/client_image_packs.dart';
+import 'package:fluffychat/utils/custom_emoji_metadata.dart';
 import 'package:fluffychat/utils/url_launcher.dart';
 import 'package:fluffychat/widgets/avatar.dart';
-import 'package:fluffychat/widgets/mxc_image.dart';
+import 'package:fluffychat/widgets/custom_emoji_media.dart';
 
 class EmojiStatusStickerPicker extends StatefulWidget {
   final Client client;
@@ -32,12 +33,26 @@ class _EmojiStatusStickerPickerState extends State<EmojiStatusStickerPicker> {
     final theme = Theme.of(context);
 
     final stickerPacks = getClientImagePacks(widget.client);
-    final packSlugs = stickerPacks.keys.toList();
+    final packSlugs = stickerPacks.keys.toList()
+      ..sort((a, b) {
+        final orderA = getCustomEmojiPackOrder(stickerPacks[a]!);
+        final orderB = getCustomEmojiPackOrder(stickerPacks[b]!);
+        final orderCompare = orderA.compareTo(orderB);
+        if (orderCompare != 0) return orderCompare;
+        return a.toLowerCase().compareTo(b.toLowerCase());
+      });
 
     // ignore: prefer_function_declarations_over_variables
     final packBuilder = (BuildContext context, int packIndex) {
       final pack = stickerPacks[packSlugs[packIndex]]!;
-      final filteredEntries = pack.images.entries.toList();
+      final filteredEntries = pack.images.entries.toList()
+        ..sort((a, b) {
+          final orderCompare = CustomEmojiMeta.fromImage(
+            a.value,
+          ).order.compareTo(CustomEmojiMeta.fromImage(b.value).order);
+          if (orderCompare != 0) return orderCompare;
+          return a.key.toLowerCase().compareTo(b.key.toLowerCase());
+        });
       if (searchFilter?.isNotEmpty ?? false) {
         filteredEntries.removeWhere(
           (e) =>
@@ -77,6 +92,7 @@ class _EmojiStatusStickerPickerState extends State<EmojiStatusStickerPicker> {
             physics: const NeverScrollableScrollPhysics(),
             itemBuilder: (BuildContext context, int imageIndex) {
               final image = pack.images[imageKeys[imageIndex]]!;
+              final metadata = CustomEmojiMeta.fromImage(image);
               return Tooltip(
                 message: image.body ?? imageKeys[imageIndex],
                 child: InkWell(
@@ -91,12 +107,14 @@ class _EmojiStatusStickerPickerState extends State<EmojiStatusStickerPicker> {
                   },
                   child: AbsorbPointer(
                     absorbing: true,
-                    child: MxcImage(
-                      uri: image.url,
+                    child: CustomEmojiMedia(
+                      client: widget.client,
+                      fallbackMxc: image.url,
+                      metadata: metadata,
+                      fallbackEmoji: metadata.primaryFallbackEmoji,
                       fit: BoxFit.contain,
                       width: 128,
                       height: 128,
-                      animated: true,
                       isThumbnail: false,
                     ),
                   ),

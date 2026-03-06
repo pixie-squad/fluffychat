@@ -6,12 +6,11 @@ import 'package:flutter/services.dart';
 import 'package:archive/archive.dart';
 import 'package:collection/collection.dart';
 import 'package:matrix/matrix.dart';
+import 'package:mime/mime.dart';
 
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/settings_emotes/settings_emotes.dart';
-import 'package:fluffychat/utils/client_manager.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:fluffychat/widgets/matrix.dart';
 
 class ImportEmoteArchiveDialog extends StatefulWidget {
   final EmotesSettingsController controller;
@@ -86,7 +85,9 @@ class _ImportEmoteArchiveDialogState extends State<ImportEmoteArchiveDialog> {
   void _importFileMap() {
     _importMap = Map.fromEntries(
       widget.archive.files
-          .where((e) => e.isFile)
+          .where(
+            (e) => e.isFile && !e.name.toLowerCase().endsWith('.gif'),
+          )
           .map((e) => MapEntry(e, e.name.emoteNameFromPath))
           .sorted((a, b) => a.value.compareTo(b.value)),
     );
@@ -140,40 +141,12 @@ class _ImportEmoteArchiveDialogState extends State<ImportEmoteArchiveDialog> {
       final imageCode = entry.value;
 
       try {
-        var mxcFile = MatrixImageFile(bytes: file.content, name: file.name);
-
-        final thumbnail = (await mxcFile.generateThumbnail(
-          nativeImplementations: ClientManager.nativeImplementations,
-        ));
-        if (thumbnail == null) {
-          Logs().w('Unable to create thumbnail');
-        } else {
-          mxcFile = thumbnail;
-        }
-        final uri = await Matrix.of(context).client.uploadContent(
-          mxcFile.bytes,
-          filename: mxcFile.name,
-          contentType: mxcFile.mimeType,
+        final uploaded = await widget.controller.uploadPackAssetBytes(
+          bytes: Uint8List.fromList(List<int>.from(file.content as List)),
+          filename: file.name,
+          mimeType: lookupMimeType(file.name),
         );
-
-        final info = <String, dynamic>{...mxcFile.info};
-
-        // normalize width / height to 256, required for stickers
-        if (info['w'] is int && info['h'] is int) {
-          final ratio = info['w'] / info['h'];
-          if (info['w'] > info['h']) {
-            info['w'] = 256;
-            info['h'] = (256.0 / ratio).round();
-          } else {
-            info['h'] = 256;
-            info['w'] = (ratio * 256.0).round();
-          }
-        }
-        widget.controller.pack!.images[imageCode] =
-            ImagePackImageContent.fromJson(<String, dynamic>{
-              'url': uri.toString(),
-              'info': info,
-            });
+        widget.controller.pack!.images[imageCode] = uploaded;
         successfulUploads.add(file.name);
       } catch (e) {
         Logs().d('Could not upload emote $imageCode');
@@ -215,14 +188,15 @@ class _EmojiImportPreview extends StatefulWidget {
 }
 
 class _EmojiImportPreviewState extends State<_EmojiImportPreview> {
-  final hasErrorNotifier = ValueNotifier(false);
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
-    // TODO: support Lottie here as well ...
     final controller = TextEditingController(text: widget.entry.value);
+    final bytes = Uint8List.fromList(
+      List<int>.from(widget.entry.key.content as List),
+    );
+    final mimeType = lookupMimeType(widget.entry.key.name);
+    final isImage = mimeType?.startsWith('image/') ?? false;
 
     return Stack(
       alignment: Alignment.topRight,
@@ -232,78 +206,76 @@ class _EmojiImportPreviewState extends State<_EmojiImportPreview> {
           icon: const Icon(Icons.remove_circle),
           tooltip: L10n.of(context).remove,
         ),
-        ValueListenableBuilder(
-          valueListenable: hasErrorNotifier,
-          builder: (context, hasError, child) {
-            if (hasError) return _ImageFileError(name: widget.entry.key.name);
-
-            return Column(
-              mainAxisSize: .min,
-              mainAxisAlignment: .center,
-              crossAxisAlignment: .center,
-              children: [
-                Image.memory(
-                  widget.entry.key.content,
-                  height: 64,
-                  width: 64,
-                  errorBuilder: (context, e, s) {
-                    WidgetsBinding.instance.addPostFrameCallback(
-                      (_) => _setRenderError(),
-                    );
-
-                    return _ImageFileError(name: widget.entry.key.name);
-                  },
-                ),
-                SizedBox(
-                  width: 128,
-                  child: TextField(
-                    controller: controller,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'^[-\w]+$')),
-                    ],
-                    autocorrect: false,
-                    minLines: 1,
-                    maxLines: 1,
-                    decoration: InputDecoration(
-                      hintText: L10n.of(context).emoteShortcode,
-                      prefixText: ': ',
-                      suffixText: ':',
-                      border: const OutlineInputBorder(),
-                      prefixStyle: TextStyle(
-                        color: theme.colorScheme.secondary,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      suffixStyle: TextStyle(
-                        color: theme.colorScheme.secondary,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    onChanged: widget.onNameChanged,
-                    onSubmitted: widget.onNameChanged,
+        Column(
+          mainAxisSize: .min,
+          mainAxisAlignment: .center,
+          crossAxisAlignment: .center,
+          children: [
+            isImage
+                ? Image.memory(
+                    bytes,
+                    height: 64,
+                    width: 64,
+                    errorBuilder: (context, e, s) =>
+                        _ArchiveFilePreview(name: widget.entry.key.name),
+                  )
+                : _ArchiveFilePreview(
+                    name: widget.entry.key.name,
+                    mimeType: mimeType,
+                  ),
+            SizedBox(
+              width: 128,
+              child: TextField(
+                controller: controller,
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'^[-\w]+$')),
+                ],
+                autocorrect: false,
+                minLines: 1,
+                maxLines: 1,
+                decoration: InputDecoration(
+                  hintText: L10n.of(context).emoteShortcode,
+                  prefixText: ': ',
+                  suffixText: ':',
+                  border: const OutlineInputBorder(),
+                  prefixStyle: TextStyle(
+                    color: theme.colorScheme.secondary,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  suffixStyle: TextStyle(
+                    color: theme.colorScheme.secondary,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-              ],
-            );
-          },
+                onChanged: widget.onNameChanged,
+                onSubmitted: widget.onNameChanged,
+              ),
+            ),
+          ],
         ),
       ],
     );
   }
-
-  void _setRenderError() {
-    hasErrorNotifier.value = true;
-    widget.onRemove.call();
-  }
 }
 
-class _ImageFileError extends StatelessWidget {
+class _ArchiveFilePreview extends StatelessWidget {
   final String name;
+  final String? mimeType;
 
-  const _ImageFileError({required this.name});
+  const _ArchiveFilePreview({required this.name, this.mimeType});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final normalizedMime = (mimeType ?? lookupMimeType(name) ?? '')
+        .toLowerCase();
+    final icon = switch (normalizedMime) {
+      String mime when mime.startsWith('video/') => Icons.videocam_outlined,
+      String mime when mime.contains('json') || mime.contains('lottie') =>
+        Icons.animation_outlined,
+      String mime when mime.contains('gzip') => Icons.archive_outlined,
+      _ => Icons.insert_drive_file_outlined,
+    };
 
     return SizedBox.square(
       dimension: 64,
@@ -314,9 +286,9 @@ class _ImageFileError extends StatelessWidget {
           mainAxisSize: .min,
           crossAxisAlignment: .center,
           children: [
-            const Icon(Icons.error),
+            Icon(icon),
             Text(
-              L10n.of(context).notAnImage,
+              name.split('.').last.toUpperCase(),
               textAlign: TextAlign.center,
               style: theme.textTheme.labelSmall,
             ),

@@ -28,6 +28,8 @@ import 'package:fluffychat/pages/chat/event_info_dialog.dart';
 import 'package:fluffychat/pages/chat/start_poll_bottom_sheet.dart';
 import 'package:fluffychat/pages/chat_details/chat_details.dart';
 import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
+import 'package:fluffychat/utils/custom_emoji_message_builder.dart';
+import 'package:fluffychat/utils/custom_emoji_metadata.dart';
 import 'package:fluffychat/utils/error_reporter.dart';
 import 'package:fluffychat/utils/file_selector.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/event_extension.dart';
@@ -43,6 +45,7 @@ import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
 import 'package:fluffychat/widgets/matrix.dart';
+import 'package:fluffychat/widgets/composer_emoji_text_controller.dart';
 import 'package:fluffychat/widgets/share_scaffold_dialog.dart';
 import '../../utils/account_bundles.dart';
 import '../../utils/localized_exception_extension.dart';
@@ -478,6 +481,10 @@ class ChatController extends State<ChatPageWithRoom>
   @override
   void initState() {
     inputFocus = FocusNode(onKeyEvent: _customEnterKeyHandling);
+    sendController = ComposerEmojiTextController(
+      room: widget.room,
+      client: widget.room.client,
+    );
 
     scrollController.addListener(_updateScrollController);
     inputFocus.addListener(_inputFocusListener);
@@ -498,6 +505,7 @@ class ChatController extends State<ChatPageWithRoom>
     );
 
     sendingClient = Matrix.of(context).client;
+    sendController.updateRoomAndClient(room: room, client: sendingClient);
     final lastEventThreadId =
         room.lastEvent?.relationshipType == RelationshipTypes.thread
         ? room.lastEvent?.relationshipEventId
@@ -591,6 +599,7 @@ class ChatController extends State<ChatPageWithRoom>
 
   void updateView() {
     if (!mounted) return;
+    sendController.refreshCatalog();
     setReadMarker();
     setState(() {});
   }
@@ -687,10 +696,11 @@ class ChatController extends State<ChatPageWithRoom>
     timeline?.cancelSubscriptions();
     timeline = null;
     inputFocus.removeListener(_inputFocusListener);
+    sendController.dispose();
     super.dispose();
   }
 
-  TextEditingController sendController = TextEditingController();
+  late final ComposerEmojiTextController sendController;
 
   void setSendingClient(Client c) {
     // first cancel typing with the old sending client
@@ -709,6 +719,8 @@ class ChatController extends State<ChatPageWithRoom>
         'Unable to load timeline after changing sending Client',
       ).onErrorCallback,
     );
+    final controllerRoom = c.getRoomById(roomId) ?? widget.room;
+    sendController.updateRoomAndClient(room: controllerRoom, client: c);
 
     // then set the new sending client
     setState(() => sendingClient = c);
@@ -737,31 +749,51 @@ class ChatController extends State<ChatPageWithRoom>
   }
 
   Future<void> _sendTextOnly() async {
-    var parseCommands = true;
+    final sourceText = sendController.text;
+    final commandMatch = RegExp(r'^\/(\w+)').firstMatch(sourceText);
 
-    final commandMatch = RegExp(r'^\/(\w+)').firstMatch(sendController.text);
-    if (commandMatch != null &&
-        !sendingClient.commands.keys.contains(commandMatch[1]!.toLowerCase())) {
-      final l10n = L10n.of(context);
-      final dialogResult = await showOkCancelAlertDialog(
-        context: context,
-        title: l10n.commandInvalid,
-        message: l10n.commandMissing(commandMatch[0]!),
-        okLabel: l10n.sendAsText,
-        cancelLabel: l10n.cancel,
-      );
-      if (dialogResult == OkCancelResult.cancel) return;
-      parseCommands = false;
+    var useCommandPath = false;
+    if (commandMatch != null) {
+      final commandName = commandMatch[1]!.toLowerCase();
+      if (sendingClient.commands.keys.contains(commandName)) {
+        useCommandPath = true;
+      } else {
+        final l10n = L10n.of(context);
+        final dialogResult = await showOkCancelAlertDialog(
+          context: context,
+          title: l10n.commandInvalid,
+          message: l10n.commandMissing(commandMatch[0]!),
+          okLabel: l10n.sendAsText,
+          cancelLabel: l10n.cancel,
+        );
+        if (dialogResult == OkCancelResult.cancel) return;
+      }
     }
 
-    // ignore: unawaited_futures
-    room.sendTextEvent(
-      sendController.text,
-      inReplyTo: replyEvent,
-      editEventId: editEvent?.eventId,
-      parseCommands: parseCommands,
-      threadRootEventId: activeThreadId,
-    );
+    if (useCommandPath) {
+      // ignore: unawaited_futures
+      room.sendTextEvent(
+        sourceText,
+        inReplyTo: replyEvent,
+        editEventId: editEvent?.eventId,
+        parseCommands: true,
+        threadRootEventId: activeThreadId,
+      );
+    } else {
+      final built = buildCustomEmojiMessage(
+        room: room,
+        sourceBody: sourceText,
+        inReplyTo: replyEvent,
+      );
+      // ignore: unawaited_futures
+      room.sendEvent(
+        built.content,
+        inReplyTo: replyEvent,
+        editEventId: editEvent?.eventId,
+        threadRootEventId: activeThreadId,
+        threadLastEventId: threadLastEventId,
+      );
+    }
     _resetInputState();
   }
 
@@ -878,8 +910,7 @@ class ChatController extends State<ChatPageWithRoom>
           );
         } on MatrixException catch (e) {
           final retryAfterMs = e.retryAfterMs;
-          if (e.error != MatrixError.M_LIMIT_EXCEEDED ||
-              retryAfterMs == null) {
+          if (e.error != MatrixError.M_LIMIT_EXCEEDED || retryAfterMs == null) {
             rethrow;
           }
           final retryAfterDuration = Duration(
@@ -1507,6 +1538,23 @@ class ChatController extends State<ChatPageWithRoom>
     );
   }
 
+  void typeCustomEmojiShortcode(
+    String shortcode, {
+    bool addTrailingSpace = true,
+  }) {
+    if (shortcode.isEmpty) return;
+    final selection = sendController.selection;
+    final text = sendController.text;
+    final replacement = addTrailingSpace ? '$shortcode ' : shortcode;
+    final start = selection.start >= 0 ? selection.start : text.length;
+    final end = selection.end >= 0 ? selection.end : text.length;
+    final newText = text.replaceRange(start, end, replacement);
+    sendController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + replacement.length),
+    );
+  }
+
   void emojiPickerBackspace() {
     sendController
       ..text = sendController.text.characters.skipLast(1).toString()
@@ -1538,13 +1586,19 @@ class ChatController extends State<ChatPageWithRoom>
     setState(() {
       pendingText = sendController.text;
       editEvent = event;
-      sendController.text = editEvent!
-          .getDisplayEvent(timeline!)
-          .calcLocalizedBodyFallback(
-            MatrixLocals(L10n.of(context)),
-            withSenderNamePrefix: false,
-            hideReply: true,
-          );
+      final displayEvent = editEvent!.getDisplayEvent(timeline!);
+      final sourceBody =
+          displayEvent.content.tryGet<String>(customEmojiSourceBodyKey) ??
+          displayEvent.content
+              .tryGetMap<String, Object?>('m.new_content')
+              ?.tryGet<String>(customEmojiSourceBodyKey);
+      sendController.text = (sourceBody != null && sourceBody.isNotEmpty)
+          ? sourceBody
+          : displayEvent.calcLocalizedBodyFallback(
+              MatrixLocals(L10n.of(context)),
+              withSenderNamePrefix: false,
+              hideReply: true,
+            );
       if (clearSelection) {
         selectedEvents.clear();
       }
