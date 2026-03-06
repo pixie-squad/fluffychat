@@ -82,15 +82,15 @@ class _LottieCompositionCache {
   }
 }
 
-/// Monitors real frame timings and adaptively throttles Lottie animations
-/// when sustained jank is detected. Degrades frame rate gradually down to a
-/// full stop, then lingers for [_lingerDuration] before recovering.
+/// Monitors real frame timings via a sliding window and adaptively throttles
+/// Lottie animations when *sustained* jank is detected. Isolated spikes from
+/// scrolling or chat loads are ignored — only a high ratio of bad frames over
+/// the last ~1 second triggers degradation.
 class AnimationJankMonitor {
   static final instance = AnimationJankMonitor._();
   AnimationJankMonitor._();
 
   bool _listening = false;
-  int _jankStreak = 0;
 
   /// 1.0 = full speed, 0.75/0.5/0.25 = degraded, 0.0 = stopped.
   double _scale = 1.0;
@@ -98,16 +98,31 @@ class AnimationJankMonitor {
 
   DateTime _lastDegradeTime = DateTime(2000);
 
-  /// Frame time above this triggers a jank count.
-  static const _jankThresholdMs = 32; // worse than ~30 fps
+  // --- Tuning knobs ---
 
-  /// Consecutive jank frames before degrading.
-  static const _requiredStreak = 3;
+  /// Only frames slower than this count as jank. 50 ms ≈ <20 fps — well above
+  /// normal scroll hitches which typically stay under 40 ms.
+  static const _jankThresholdMs = 50;
 
-  /// How long smooth frames must persist before recovering one step.
-  static const _lingerDuration = Duration(seconds: 30);
+  /// Rolling window size (~1 s of frames at 60 fps).
+  static const _windowSize = 60;
+
+  /// Degrade when more than half the window is janky (sustained overload).
+  static const _degradeRatio = 0.5;
+
+  /// Recover when less than 10 % of the window is janky.
+  static const _recoverRatio = 0.10;
+
+  /// Cooldown between degradation / recovery steps.
+  static const _lingerDuration = Duration(seconds: 5);
 
   static const _step = 0.25;
+
+  // --- Sliding window ---
+
+  final _window = List<bool>.filled(_windowSize, false);
+  int _windowIndex = 0;
+  int _jankCount = 0;
 
   /// Controllers tracked for pause/resume on full stop.
   final Map<AnimationController, bool> _tracked = {};
@@ -127,20 +142,29 @@ class AnimationJankMonitor {
   }
 
   void _onTimings(List<FrameTiming> timings) {
-    final hasJank = timings.any(
-      (t) => t.totalSpan.inMilliseconds > _jankThresholdMs,
-    );
+    for (final timing in timings) {
+      final isJank = timing.totalSpan.inMilliseconds > _jankThresholdMs;
 
-    if (hasJank) {
-      _jankStreak++;
-      if (_jankStreak >= _requiredStreak && _scale > 0) {
-        _scale = (_scale - _step).clamp(0.0, 1.0);
-        _lastDegradeTime = DateTime.now();
-        if (_scale <= 0) _pauseAll();
-      }
-    } else {
-      _jankStreak = 0;
-      _tryRecover();
+      // Evict oldest entry from the window and insert new one.
+      if (_window[_windowIndex]) _jankCount--;
+      _window[_windowIndex] = isJank;
+      if (isJank) _jankCount++;
+      _windowIndex = (_windowIndex + 1) % _windowSize;
+    }
+
+    final ratio = _jankCount / _windowSize;
+    final now = DateTime.now();
+    final cooldownElapsed = now.difference(_lastDegradeTime) >= _lingerDuration;
+
+    if (ratio >= _degradeRatio && _scale > 0 && cooldownElapsed) {
+      _scale = (_scale - _step).clamp(0.0, 1.0);
+      _lastDegradeTime = now;
+      if (_scale <= 0) _pauseAll();
+    } else if (ratio <= _recoverRatio && _scale < 1.0 && cooldownElapsed) {
+      final wasStopped = _scale <= 0;
+      _scale = (_scale + _step).clamp(0.0, 1.0);
+      _lastDegradeTime = now;
+      if (wasStopped && _scale > 0) _resumeAll();
     }
   }
 
@@ -161,26 +185,19 @@ class AnimationJankMonitor {
     }
   }
 
-  void _tryRecover() {
-    if (_scale >= 1.0) return;
-    if (DateTime.now().difference(_lastDegradeTime) < _lingerDuration) return;
-    final wasStopped = _scale <= 0;
-    _scale = (_scale + _step).clamp(0.0, 1.0);
-    // Reset timer so next recovery step also waits the full linger duration.
-    _lastDegradeTime = DateTime.now();
-    if (wasStopped && _scale > 0) _resumeAll();
-  }
-
   FrameRate adaptRate(FrameRate base) {
     if (_scale >= 1.0) return base;
-    final fps = (base.framesPerSecond * _scale).clamp(1.0, base.framesPerSecond);
+    final fps =
+        (base.framesPerSecond * _scale).clamp(1.0, base.framesPerSecond);
     return FrameRate(fps);
   }
 
   @visibleForTesting
   static void resetForTests() {
     instance._scale = 1.0;
-    instance._jankStreak = 0;
+    instance._jankCount = 0;
+    instance._windowIndex = 0;
+    instance._window.fillRange(0, _windowSize, false);
     instance._lastDegradeTime = DateTime(2000);
     instance._tracked.clear();
     instance._listening = false;
