@@ -57,7 +57,8 @@ enum AppSettings<T> {
   presetHomeserver<String>('chat.fluffy.preset_homeserver', ''),
   welcomeText<String>('chat.fluffy.welcome_text', ''),
   compressMedia<bool>('chat.fluffy.compress_media', true),
-  groupAsAlbum<bool>('chat.fluffy.group_as_album', true);
+  groupAsAlbum<bool>('chat.fluffy.group_as_album', true),
+  customEmojiRecents<String>('chat.fluffy.custom_emoji_recents', '');
 
   final String key;
   final T defaultValue;

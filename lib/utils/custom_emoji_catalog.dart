@@ -106,6 +106,9 @@ class CustomEmojiPackGroup {
     }
     return null;
   }
+
+  CustomEmojiCatalogEntry? get firstEntry =>
+      entries.isEmpty ? null : entries.first;
 }
 
 class CustomEmojiCatalog {

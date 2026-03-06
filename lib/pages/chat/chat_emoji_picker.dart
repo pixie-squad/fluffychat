@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:matrix/matrix.dart';
 
+import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/pages/chat/sticker_picker_dialog.dart';
@@ -10,6 +13,27 @@ import 'package:fluffychat/utils/custom_emoji_catalog.dart';
 import 'package:fluffychat/utils/custom_emoji_metadata.dart';
 import 'package:fluffychat/widgets/custom_emoji_media.dart';
 import 'chat.dart';
+
+const _recentsPackSlug = '\$_recents';
+const _maxRecents = 30;
+
+List<String> getCustomEmojiRecents() {
+  final raw = AppSettings.customEmojiRecents.value;
+  if (raw.isEmpty) return [];
+  try {
+    return (jsonDecode(raw) as List).cast<String>();
+  } catch (_) {
+    return [];
+  }
+}
+
+void addCustomEmojiRecent(String mxcUri) {
+  final recents = getCustomEmojiRecents();
+  recents.remove(mxcUri);
+  recents.insert(0, mxcUri);
+  if (recents.length > _maxRecents) recents.length = _maxRecents;
+  AppSettings.customEmojiRecents.setItem(jsonEncode(recents));
+}
 
 class ChatEmojiPicker extends StatefulWidget {
   final ChatController controller;
@@ -56,6 +80,7 @@ class _ChatEmojiPickerState extends State<ChatEmojiPicker> {
                         StickerPickerDialog(
                           room: widget.controller.room,
                           onSelected: (sticker) {
+                            addCustomEmojiRecent(sticker.url.toString());
                             final stickerJson = sticker.toJson();
                             widget.controller.room.sendEvent(
                               {
@@ -106,9 +131,21 @@ class _EmojiTab extends StatelessWidget {
     );
     final packGroups = catalog.groupedPacks();
 
-    final selectedGroup = packGroups
-        .where((p) => p.slug == selectedPack)
-        .firstOrNull;
+    final isRecents = selectedPack == _recentsPackSlug;
+    final selectedGroup = isRecents
+        ? null
+        : packGroups
+            .where((p) => p.slug == selectedPack)
+            .firstOrNull;
+
+    List<CustomEmojiCatalogEntry>? recentEntries;
+    if (isRecents) {
+      final recentMxcs = getCustomEmojiRecents();
+      recentEntries = recentMxcs
+          .map((mxc) => catalog.resolveByMxc(Uri.parse(mxc)))
+          .whereType<CustomEmojiCatalogEntry>()
+          .toList();
+    }
 
     return Column(
       children: [
@@ -129,28 +166,71 @@ class _EmojiTab extends StatelessWidget {
                       onSelected: (_) => onSelectedPackChanged(null),
                     ),
                   ),
-                  ...packGroups.map(
-                    (pack) => Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: ChoiceChip(
-                        selected: selectedPack == pack.slug,
-                        onSelected: (_) => onSelectedPackChanged(pack.slug),
-                        label: Text(
-                          pack.iconEmoji ??
-                              (pack.displayName.isEmpty
-                                  ? '?'
-                                  : pack.displayName[0]),
-                        ),
-                        tooltip: pack.displayName,
-                      ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ChoiceChip(
+                      label: const Icon(Icons.history, size: 18),
+                      selected: isRecents,
+                      onSelected: (_) =>
+                          onSelectedPackChanged(_recentsPackSlug),
+                      tooltip: 'Recent',
                     ),
+                  ),
+                  ...packGroups.map(
+                    (pack) {
+                      final firstEntry = pack.firstEntry;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: ChoiceChip(
+                          selected: selectedPack == pack.slug,
+                          onSelected: (_) => onSelectedPackChanged(pack.slug),
+                          label: firstEntry != null
+                              ? SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CustomEmojiMedia(
+                                    client: controller.room.client,
+                                    fallbackMxc: firstEntry.primaryMxc,
+                                    metadata: firstEntry.metadata,
+                                    fallbackEmoji:
+                                        firstEntry.primaryFallbackEmoji,
+                                    width: 24,
+                                    height: 24,
+                                    isThumbnail: true,
+                                  ),
+                                )
+                              : Text(
+                                  pack.displayName.isEmpty
+                                      ? '?'
+                                      : pack.displayName[0],
+                                ),
+                          tooltip: pack.displayName,
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
             ),
           ),
         Expanded(
-          child: selectedGroup == null
+          child: isRecents
+              ? (recentEntries != null && recentEntries.isNotEmpty
+                  ? _CustomPackGrid(
+                      controller: controller,
+                      entries: recentEntries,
+                    )
+                  : Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Text(
+                          L10n.of(context).emoteKeyboardNoRecents,
+                          style: theme.textTheme.bodyLarge,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ))
+              : selectedGroup == null
               ? EmojiPicker(
                   onEmojiSelected: controller.onEmojiSelected,
                   onBackspacePressed: controller.emojiPickerBackspace,
@@ -213,6 +293,7 @@ class _CustomPackGrid extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
           onTap: () {
+            addCustomEmojiRecent(entry.primaryMxc.toString());
             controller.typeCustomEmojiShortcode(entry.insertShortcode);
             controller.onInputBarChanged(controller.sendController.text);
           },

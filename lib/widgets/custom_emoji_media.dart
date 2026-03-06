@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:lottie/lottie.dart';
 import 'package:matrix/matrix.dart';
 import 'package:path_provider/path_provider.dart';
@@ -15,6 +16,176 @@ import 'package:fluffychat/utils/client_download_content_extension.dart';
 import 'package:fluffychat/utils/custom_emoji_metadata.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/mxc_image.dart';
+
+class CustomEmojiAnimatedRenderBudget {
+  static int get maxActive {
+    if (_maxActiveOverrideForTests != null) return _maxActiveOverrideForTests!;
+    if (PlatformInfos.isAndroid) return 20;
+    if (PlatformInfos.isIOS) return 25;
+    if (PlatformInfos.isWeb) return 15;
+    return 40; // desktop
+  }
+
+  static final Set<Object> _owners = <Object>{};
+
+  CustomEmojiAnimatedRenderBudget._();
+
+  static bool tryAcquire(Object owner) {
+    if (_owners.contains(owner)) return true;
+    if (_owners.length >= maxActive) return false;
+    _owners.add(owner);
+    return true;
+  }
+
+  static void release(Object owner) {
+    _owners.remove(owner);
+  }
+
+  @visibleForTesting
+  static int get activeCountForTests => _owners.length;
+
+  @visibleForTesting
+  static int? _maxActiveOverrideForTests;
+
+  @visibleForTesting
+  static void resetForTests({int? maxActiveOverride}) {
+    _owners.clear();
+    _maxActiveOverrideForTests = maxActiveOverride;
+  }
+}
+
+class _LottieCompositionCache {
+  static final Map<String, LottieComposition> _cache = {};
+  static final Map<String, Future<LottieComposition>> _pending = {};
+
+  static Future<LottieComposition> getOrParse(
+    String key,
+    Uint8List bytes,
+  ) async {
+    if (_cache[key] case final cached?) return cached;
+    if (_pending[key] case final pending?) return pending;
+    final future = Future(() => LottieComposition.parseJsonBytes(bytes));
+    _pending[key] = future;
+    try {
+      final comp = await future;
+      _cache[key] = comp;
+      return comp;
+    } finally {
+      _pending.remove(key);
+    }
+  }
+
+  @visibleForTesting
+  static void resetForTests() {
+    _cache.clear();
+    _pending.clear();
+  }
+}
+
+/// Monitors real frame timings and adaptively throttles Lottie animations
+/// when sustained jank is detected. Degrades frame rate gradually down to a
+/// full stop, then lingers for [_lingerDuration] before recovering.
+class AnimationJankMonitor {
+  static final instance = AnimationJankMonitor._();
+  AnimationJankMonitor._();
+
+  bool _listening = false;
+  int _jankStreak = 0;
+
+  /// 1.0 = full speed, 0.75/0.5/0.25 = degraded, 0.0 = stopped.
+  double _scale = 1.0;
+  double get scale => _scale;
+
+  DateTime _lastDegradeTime = DateTime(2000);
+
+  /// Frame time above this triggers a jank count.
+  static const _jankThresholdMs = 32; // worse than ~30 fps
+
+  /// Consecutive jank frames before degrading.
+  static const _requiredStreak = 3;
+
+  /// How long smooth frames must persist before recovering one step.
+  static const _lingerDuration = Duration(seconds: 30);
+
+  static const _step = 0.25;
+
+  /// Controllers tracked for pause/resume on full stop.
+  final Map<AnimationController, bool> _tracked = {};
+
+  void ensureListening() {
+    if (_listening) return;
+    _listening = true;
+    SchedulerBinding.instance.addTimingsCallback(_onTimings);
+  }
+
+  void track(AnimationController controller, {required bool loop}) {
+    _tracked[controller] = loop;
+  }
+
+  void untrack(AnimationController controller) {
+    _tracked.remove(controller);
+  }
+
+  void _onTimings(List<FrameTiming> timings) {
+    final hasJank = timings.any(
+      (t) => t.totalSpan.inMilliseconds > _jankThresholdMs,
+    );
+
+    if (hasJank) {
+      _jankStreak++;
+      if (_jankStreak >= _requiredStreak && _scale > 0) {
+        _scale = (_scale - _step).clamp(0.0, 1.0);
+        _lastDegradeTime = DateTime.now();
+        if (_scale <= 0) _pauseAll();
+      }
+    } else {
+      _jankStreak = 0;
+      _tryRecover();
+    }
+  }
+
+  void _pauseAll() {
+    for (final controller in _tracked.keys) {
+      if (controller.isAnimating) controller.stop(canceled: false);
+    }
+  }
+
+  void _resumeAll() {
+    for (final entry in _tracked.entries) {
+      if (entry.key.isAnimating) continue;
+      if (entry.value) {
+        entry.key.repeat();
+      } else {
+        entry.key.forward();
+      }
+    }
+  }
+
+  void _tryRecover() {
+    if (_scale >= 1.0) return;
+    if (DateTime.now().difference(_lastDegradeTime) < _lingerDuration) return;
+    final wasStopped = _scale <= 0;
+    _scale = (_scale + _step).clamp(0.0, 1.0);
+    // Reset timer so next recovery step also waits the full linger duration.
+    _lastDegradeTime = DateTime.now();
+    if (wasStopped && _scale > 0) _resumeAll();
+  }
+
+  FrameRate adaptRate(FrameRate base) {
+    if (_scale >= 1.0) return base;
+    final fps = (base.framesPerSecond * _scale).clamp(1.0, base.framesPerSecond);
+    return FrameRate(fps);
+  }
+
+  @visibleForTesting
+  static void resetForTests() {
+    instance._scale = 1.0;
+    instance._jankStreak = 0;
+    instance._lastDegradeTime = DateTime(2000);
+    instance._tracked.clear();
+    instance._listening = false;
+  }
+}
 
 class CustomEmojiMedia extends StatefulWidget {
   final Client client;
@@ -64,6 +235,12 @@ class _CustomEmojiMediaState extends State<CustomEmojiMedia> {
 
   bool get _autoplay => widget.autoplay ?? AppSettings.autoplayImages.value;
 
+  bool _isAnimatedSource(CustomEmojiMediaKind kind) =>
+      kind == CustomEmojiMediaKind.webm ||
+      kind == CustomEmojiMediaKind.mp4 ||
+      kind == CustomEmojiMediaKind.lottieJson ||
+      kind == CustomEmojiMediaKind.lottieTgs;
+
   bool _isSupported(CustomEmojiMediaKind kind) {
     if (kind == CustomEmojiMediaKind.webm || kind == CustomEmojiMediaKind.mp4) {
       return PlatformInfos.supportsVideoPlayer;
@@ -78,9 +255,21 @@ class _CustomEmojiMediaState extends State<CustomEmojiMedia> {
     });
   }
 
+  void _releaseAnimatedRenderSlot() {
+    CustomEmojiAnimatedRenderBudget.release(this);
+  }
+
+  @override
+  void dispose() {
+    _releaseAnimatedRenderSlot();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     var anySkippedByPlatform = false;
+    var anySkippedByBudget = false;
+    CustomEmojiMediaSource? selectedSource;
     for (var i = _sourceIndex; i < _sources.length; i++) {
       final source = _sources[i];
       if (!_isSupported(source.kind)) {
@@ -88,9 +277,24 @@ class _CustomEmojiMediaState extends State<CustomEmojiMedia> {
         continue;
       }
 
-      final child = switch (source.kind) {
+      final needsAnimatedSlot = _autoplay && _isAnimatedSource(source.kind);
+      if (needsAnimatedSlot &&
+          !CustomEmojiAnimatedRenderBudget.tryAcquire(this)) {
+        anySkippedByBudget = true;
+        continue;
+      }
+
+      selectedSource = source;
+      if (!needsAnimatedSlot) {
+        _releaseAnimatedRenderSlot();
+      }
+      break;
+    }
+
+    if (selectedSource != null) {
+      final child = switch (selectedSource.kind) {
         CustomEmojiMediaKind.image => MxcImage(
-          uri: source.url,
+          uri: selectedSource.url,
           width: widget.width,
           height: widget.height,
           fit: widget.fit,
@@ -102,7 +306,7 @@ class _CustomEmojiMediaState extends State<CustomEmojiMedia> {
         CustomEmojiMediaKind.webm ||
         CustomEmojiMediaKind.mp4 => _LoopingVideoEmoji(
           client: widget.client,
-          source: source,
+          source: selectedSource,
           width: widget.width,
           height: widget.height,
           fit: widget.fit,
@@ -114,7 +318,7 @@ class _CustomEmojiMediaState extends State<CustomEmojiMedia> {
         CustomEmojiMediaKind.lottieJson ||
         CustomEmojiMediaKind.lottieTgs => _LottieEmoji(
           client: widget.client,
-          source: source,
+          source: selectedSource,
           width: widget.width,
           height: widget.height,
           fit: widget.fit,
@@ -127,6 +331,8 @@ class _CustomEmojiMediaState extends State<CustomEmojiMedia> {
 
       return SizedBox(width: widget.width, height: widget.height, child: child);
     }
+
+    _releaseAnimatedRenderSlot();
 
     // When sources were skipped because the platform lacks video support,
     // show a server-generated thumbnail instead of a text fallback.
@@ -143,6 +349,14 @@ class _CustomEmojiMediaState extends State<CustomEmojiMedia> {
           borderRadius: widget.borderRadius,
           client: widget.client,
         ),
+      );
+    }
+
+    if (anySkippedByBudget) {
+      return _EmojiFallback(
+        width: widget.width,
+        height: widget.height,
+        emoji: widget.fallbackEmoji,
       );
     }
 
@@ -199,6 +413,19 @@ class _LoopingVideoEmojiState extends State<_LoopingVideoEmoji> {
         oldWidget.loop != widget.loop) {
       _disposeController();
       _load();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final tickerEnabled = TickerMode.of(context);
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (!tickerEnabled && controller.value.isPlaying) {
+      controller.pause();
+    } else if (tickerEnabled && widget.autoplay && !controller.value.isPlaying) {
+      controller.play();
     }
   }
 
@@ -319,12 +546,22 @@ class _LottieEmoji extends StatefulWidget {
   State<_LottieEmoji> createState() => _LottieEmojiState();
 }
 
-class _LottieEmojiState extends State<_LottieEmoji> {
-  Uint8List? _bytes;
+class _LottieEmojiState extends State<_LottieEmoji>
+    with TickerProviderStateMixin {
+  LottieComposition? _composition;
+  AnimationController? _controller;
+
+  static FrameRate get _emojiFrameRate =>
+      PlatformInfos.isMobile ? const FrameRate(15) : const FrameRate(24);
+
+  /// Staggers animation start so not all emojis rasterize frame 0
+  /// simultaneously. Spreads warmup cost across multiple display frames.
+  static int _staggerCounter = 0;
 
   @override
   void initState() {
     super.initState();
+    AnimationJankMonitor.instance.ensureListening();
     _load();
   }
 
@@ -332,7 +569,8 @@ class _LottieEmojiState extends State<_LottieEmoji> {
   void didUpdateWidget(covariant _LottieEmoji oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.source.url != widget.source.url) {
-      _bytes = null;
+      _disposeController();
+      _composition = null;
       _load();
     }
   }
@@ -348,37 +586,76 @@ class _LottieEmojiState extends State<_LottieEmoji> {
           ? Uint8List.fromList(GZipDecoder().decodeBytes(bytes))
           : bytes;
 
+      final composition = await _LottieCompositionCache.getOrParse(
+        widget.source.url.toString(),
+        payload,
+      );
+
       if (!mounted) return;
+
+      final monitor = AnimationJankMonitor.instance;
+      final controller = AnimationController(
+        vsync: this,
+        duration: composition.duration,
+      );
+      monitor.track(controller, loop: widget.loop);
+
+      // Only start if the jank monitor hasn't fully throttled animations.
+      if (widget.autoplay && monitor.scale > 0) {
+        // Stagger start offset so rasterization warmup is spread across
+        // multiple display frames instead of all hitting frame 0 together.
+        final offset = (_staggerCounter++ % 7) / 7.0;
+        if (widget.loop) {
+          // Set value BEFORE repeat — value setter calls stop() internally.
+          controller.value = offset;
+          controller.repeat();
+        } else {
+          controller.forward(from: offset);
+        }
+      }
+
       setState(() {
-        _bytes = payload;
+        _composition = composition;
+        _controller = controller;
       });
     } catch (_) {
       widget.onError();
     }
   }
 
+  void _disposeController() {
+    final controller = _controller;
+    if (controller != null) {
+      AnimationJankMonitor.instance.untrack(controller);
+      controller.dispose();
+    }
+    _controller = null;
+  }
+
+  @override
+  void dispose() {
+    _disposeController();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final bytes = _bytes;
-    if (bytes == null) {
+    final composition = _composition;
+    final controller = _controller;
+    if (composition == null || controller == null) {
       return const SizedBox.shrink();
     }
 
     return ClipRRect(
       borderRadius: widget.borderRadius,
-      child: Lottie.memory(
-        bytes,
+      child: Lottie(
+        composition: composition,
+        controller: controller,
         width: widget.width,
         height: widget.height,
         fit: widget.fit,
-        repeat: widget.loop,
-        animate: widget.autoplay,
-        errorBuilder: (context, error, stackTrace) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) widget.onError();
-          });
-          return const SizedBox.shrink();
-        },
+        frameRate: AnimationJankMonitor.instance.adaptRate(_emojiFrameRate),
+        renderCache: RenderCache.raster,
       ),
     );
   }

@@ -6,7 +6,6 @@ import 'package:matrix/matrix.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/custom_emoji_metadata.dart';
 import 'package:fluffychat/utils/platform_infos.dart';
-import 'package:fluffychat/utils/url_launcher.dart';
 import 'package:fluffychat/widgets/custom_emoji_media.dart';
 import 'package:fluffychat/widgets/layouts/max_width_body.dart';
 import '../../widgets/matrix.dart';
@@ -44,10 +43,6 @@ class EmotesSettingsView extends StatelessWidget {
     if (packKeys != null && packKeys.isEmpty) {
       packKeys.add('');
     }
-    final attributionUrl = Uri.tryParse(
-      controller.packAttributionController.text,
-    );
-
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !controller.showSave,
@@ -198,30 +193,6 @@ class EmotesSettingsView extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0),
                 child: TextField(
-                  maxLength: 256,
-                  controller: controller.packAttributionController,
-                  readOnly: controller.readonly,
-                  keyboardType: TextInputType.url,
-                  onSubmitted: (_) => controller.submitAttributionAction(),
-                  decoration: InputDecoration(
-                    counter: const SizedBox.shrink(),
-                    labelText: L10n.of(context).attribution,
-                    suffixIcon: attributionUrl == null
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.link_outlined),
-                            onPressed: () => UrlLauncher(
-                              context,
-                              attributionUrl.toString(),
-                            ).launchUrl(),
-                          ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                child: TextField(
                   maxLength: 10,
                   keyboardType: TextInputType.number,
                   controller: controller.packOrderController,
@@ -294,11 +265,18 @@ class EmotesSettingsView extends StatelessWidget {
                       ),
                     ),
                   )
-                : ListView.separated(
+                : ReorderableListView.builder(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
-                    separatorBuilder: (BuildContext context, int i) =>
-                        const SizedBox.shrink(),
+                    buildDefaultDragHandles: false,
+                    onReorder: controller.readonly
+                        ? (_, _) {}
+                        : (oldIndex, newIndex) =>
+                            controller.reorderImage(
+                              imageKeys,
+                              oldIndex,
+                              newIndex,
+                            ),
                     itemCount: imageKeys.length,
                     itemBuilder: (BuildContext context, int i) {
                       final imageCode = imageKeys[i];
@@ -306,22 +284,25 @@ class EmotesSettingsView extends StatelessWidget {
                       final metadata = controller.imageMetadata(imageCode);
                       final textEditingController = TextEditingController();
                       textEditingController.text = imageCode;
-                      final aliasesController = TextEditingController(
-                        text: metadata.aliases.join(', '),
-                      );
-                      final fallbackEmojisController = TextEditingController(
-                        text: metadata.emojis.join(', '),
-                      );
-                      final orderController = TextEditingController(
-                        text: metadata.order.toString(),
-                      );
                       final useShortCuts =
                           (PlatformInfos.isWeb || PlatformInfos.isDesktop);
                       return Column(
+                        key: ValueKey(imageCode),
                         children: [
                           ListTile(
                             title: Row(
                               children: [
+                                if (!controller.readonly)
+                                  ReorderableDragStartListener(
+                                    index: i,
+                                    child: const Padding(
+                                      padding: EdgeInsets.only(right: 4),
+                                      child: Icon(
+                                        Icons.drag_handle,
+                                        size: 20,
+                                      ),
+                                    ),
+                                  ),
                                 Expanded(
                                   child: Shortcuts(
                                     shortcuts: !useShortCuts
@@ -435,58 +416,36 @@ class EmotesSettingsView extends StatelessWidget {
                               bottom: 8,
                             ),
                             child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                TextField(
-                                  readOnly: controller.readonly,
-                                  controller: aliasesController,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Aliases (comma separated)',
-                                  ),
-                                  onSubmitted: (value) => controller
-                                      .submitAliasesAction(imageCode, value),
+                                _ChipField(
+                                  label: 'Aliases',
+                                  values: metadata.aliases,
+                                  readonly: controller.readonly,
+                                  onAdd: (value) =>
+                                      controller.addAlias(imageCode, value),
+                                  onRemove: (value) =>
+                                      controller.removeAlias(imageCode, value),
                                 ),
                                 const SizedBox(height: 8),
-                                TextField(
-                                  readOnly: controller.readonly,
-                                  controller: fallbackEmojisController,
-                                  decoration: const InputDecoration(
-                                    labelText:
-                                        'Fallback emojis (comma separated)',
+                                _ChipField(
+                                  label: 'Fallback emojis',
+                                  values: metadata.emojis,
+                                  readonly: controller.readonly,
+                                  onAdd: (value) => controller
+                                      .addFallbackEmoji(imageCode, value),
+                                  onRemove: (value) => controller
+                                      .removeFallbackEmoji(imageCode, value),
+                                ),
+                                if (!controller.readonly) ...[
+                                  const SizedBox(height: 8),
+                                  OutlinedButton.icon(
+                                    onPressed: () => controller
+                                        .editMediaSourcesAction(imageCode),
+                                    icon: const Icon(Icons.tune_outlined),
+                                    label: const Text('Media'),
                                   ),
-                                  onSubmitted: (value) =>
-                                      controller.submitFallbackEmojisAction(
-                                        imageCode,
-                                        value,
-                                      ),
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: TextField(
-                                        readOnly: controller.readonly,
-                                        controller: orderController,
-                                        keyboardType: TextInputType.number,
-                                        decoration: const InputDecoration(
-                                          labelText: 'Item order',
-                                        ),
-                                        onSubmitted: (value) =>
-                                            controller.submitItemOrderAction(
-                                              imageCode,
-                                              value,
-                                            ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    if (!controller.readonly)
-                                      OutlinedButton.icon(
-                                        onPressed: () => controller
-                                            .editMediaSourcesAction(imageCode),
-                                        icon: const Icon(Icons.tune_outlined),
-                                        label: const Text('Media'),
-                                      ),
-                                  ],
-                                ),
+                                ],
                               ],
                             ),
                           ),
@@ -554,6 +513,97 @@ class _EmoteImage extends StatelessWidget {
         height: size,
         isThumbnail: false,
       ),
+    );
+  }
+}
+
+class _ChipField extends StatefulWidget {
+  final String label;
+  final List<String> values;
+  final bool readonly;
+  final ValueChanged<String> onAdd;
+  final ValueChanged<String> onRemove;
+
+  const _ChipField({
+    required this.label,
+    required this.values,
+    required this.readonly,
+    required this.onAdd,
+    required this.onRemove,
+  });
+
+  @override
+  State<_ChipField> createState() => _ChipFieldState();
+}
+
+class _ChipFieldState extends State<_ChipField> {
+  final _textController = TextEditingController();
+  final _focusNode = FocusNode();
+
+  void _submit() {
+    final text = _textController.text.trim();
+    if (text.isEmpty) return;
+    widget.onAdd(text);
+    _textController.clear();
+    _focusNode.requestFocus();
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          widget.label,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            for (final value in widget.values)
+              InputChip(
+                label: Text(value),
+                onDeleted: widget.readonly ? null : () => widget.onRemove(value),
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+              ),
+            if (!widget.readonly)
+              SizedBox(
+                width: 120,
+                child: TextField(
+                  controller: _textController,
+                  focusNode: _focusNode,
+                  style: theme.textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    hintText: '+ Add',
+                    hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant.withAlpha(128),
+                    ),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 8,
+                    ),
+                    border: InputBorder.none,
+                  ),
+                  onSubmitted: (_) => _submit(),
+                ),
+              ),
+          ],
+        ),
+      ],
     );
   }
 }

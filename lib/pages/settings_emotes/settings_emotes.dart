@@ -83,8 +83,6 @@ class EmotesSettingsController extends State<EmotesSettings> {
     final eventPack = event?.content.tryGetMap<String, Object?>('pack');
     packDisplayNameController.text =
         eventPack?.tryGet<String>('display_name') ?? '';
-    packAttributionController.text =
-        eventPack?.tryGet<String>('attribution') ?? '';
     packOrderController.text = event == null
         ? '0'
         : getCustomEmojiPackOrder(event.parsedImagePackContent).toString();
@@ -177,9 +175,6 @@ class EmotesSettingsController extends State<EmotesSettings> {
   final TextEditingController packDisplayNameController =
       TextEditingController();
 
-  final TextEditingController packAttributionController =
-      TextEditingController();
-
   final TextEditingController packOrderController = TextEditingController();
 
   void removeImageAction(String oldImageCode) => setState(() {
@@ -204,17 +199,6 @@ class EmotesSettingsController extends State<EmotesSettings> {
 
     setState(() {
       pack!.pack.displayName = input;
-      showSave = true;
-    });
-  }
-
-  void submitAttributionAction() {
-    if (readonly) return;
-    packAttributionController.text = packAttributionController.text.trim();
-    final input = packAttributionController.text;
-
-    setState(() {
-      pack!.pack.attribution = input;
       showSave = true;
     });
   }
@@ -266,23 +250,16 @@ class EmotesSettingsController extends State<EmotesSettings> {
   CustomEmojiMeta imageMetadata(String imageCode) =>
       CustomEmojiMeta.fromImage(pack!.images[imageCode]!);
 
-  void submitAliasesAction(String imageCode, String value) {
+  void addAlias(String imageCode, String value) {
+    var alias = value.trim();
+    if (alias.startsWith(':')) alias = alias.substring(1);
+    if (alias.endsWith(':')) alias = alias.substring(0, alias.length - 1);
+    if (alias.isEmpty) return;
     _updateImageMeta(imageCode, (current) {
-      final aliases = value
-          .split(',')
-          .map((part) => part.trim())
-          .where((part) => part.isNotEmpty)
-          .map((alias) {
-            if (alias.startsWith(':')) alias = alias.substring(1);
-            if (alias.endsWith(':')) {
-              alias = alias.substring(0, alias.length - 1);
-            }
-            return alias;
-          })
-          .where((alias) => alias.isNotEmpty)
-          .toSet()
-          .toList();
-      aliases.sort();
+      if (current.aliases.any((a) => a.toLowerCase() == alias.toLowerCase())) {
+        return current;
+      }
+      final aliases = [...current.aliases, alias]..sort();
       return CustomEmojiMeta(
         aliases: aliases,
         emojis: current.emojis,
@@ -292,20 +269,70 @@ class EmotesSettingsController extends State<EmotesSettings> {
     });
   }
 
-  void submitFallbackEmojisAction(String imageCode, String value) {
+  void removeAlias(String imageCode, String alias) {
     _updateImageMeta(imageCode, (current) {
-      final emojis = value
-          .split(',')
-          .map((part) => part.trim())
-          .where((part) => part.isNotEmpty)
-          .toSet()
-          .toList();
+      final aliases = current.aliases.where((a) => a != alias).toList();
+      return CustomEmojiMeta(
+        aliases: aliases,
+        emojis: current.emojis,
+        order: current.order,
+        media: current.media,
+      );
+    });
+  }
+
+  void addFallbackEmoji(String imageCode, String value) {
+    final emoji = value.trim();
+    if (emoji.isEmpty) return;
+    _updateImageMeta(imageCode, (current) {
+      if (current.emojis.contains(emoji)) return current;
+      final emojis = [...current.emojis, emoji];
       return CustomEmojiMeta(
         aliases: current.aliases,
         emojis: emojis,
         order: current.order,
         media: current.media,
       );
+    });
+  }
+
+  void removeFallbackEmoji(String imageCode, String emoji) {
+    _updateImageMeta(imageCode, (current) {
+      final emojis = current.emojis.where((e) => e != emoji).toList();
+      return CustomEmojiMeta(
+        aliases: current.aliases,
+        emojis: emojis,
+        order: current.order,
+        media: current.media,
+      );
+    });
+  }
+
+  void reorderImage(List<String> imageKeys, int oldIndex, int newIndex) {
+    if (readonly) return;
+    if (oldIndex < newIndex) newIndex--;
+    if (oldIndex == newIndex) return;
+    final key = imageKeys.removeAt(oldIndex);
+    imageKeys.insert(newIndex, key);
+    setState(() {
+      for (var i = 0; i < imageKeys.length; i++) {
+        final code = imageKeys[i];
+        final image = pack!.images[code];
+        if (image == null) continue;
+        final current = CustomEmojiMeta.fromImage(image);
+        if (current.order != i) {
+          pack!.images[code] = applyCustomEmojiMeta(
+            image,
+            CustomEmojiMeta(
+              aliases: current.aliases,
+              emojis: current.emojis,
+              order: i,
+              media: current.media,
+            ),
+          );
+        }
+      }
+      showSave = true;
     });
   }
 
