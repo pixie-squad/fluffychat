@@ -1055,7 +1055,11 @@ class _UserDialogState extends State<UserDialog> {
         await _client.setProfileField(
           _client.userID!,
           profileEmojiStatusField,
-          {profileEmojiStatusField: uri.toString()},
+          {
+            profileEmojiStatusField: {
+              'url': uri.toString(),
+            },
+          },
         );
         profileEmojiStatusCache.invalidate(_client.userID!);
       },
@@ -1110,7 +1114,12 @@ class _UserDialogState extends State<UserDialog> {
         await _client.setProfileField(
           _client.userID!,
           profileEmojiStatusField,
-          {profileEmojiStatusField: selected!.url.toString()},
+          {
+            profileEmojiStatusField: {
+              'url': selected!.url.toString(),
+              'image': selected!.toJson(),
+            },
+          },
         );
         profileEmojiStatusCache.invalidate(_client.userID!);
       },
@@ -1170,20 +1179,22 @@ class _UserDialogState extends State<UserDialog> {
     required BoxFit fit,
   }) {
     final entry = CustomEmojiCatalog.fromClient(_client).resolveByMxc(uri);
-    if (entry == null) {
-      return MxcImage(
-        uri: uri,
+    final resolvedMeta =
+        entry?.metadata ?? _profileFields.emojiStatus?.metadata;
+    if (resolvedMeta != null) {
+      return CustomEmojiMedia(
+        client: _client,
+        fallbackMxc: uri,
+        metadata: resolvedMeta,
+        fallbackEmoji: entry?.primaryFallbackEmoji,
         width: size,
         height: size,
         fit: fit,
         isThumbnail: false,
       );
     }
-    return CustomEmojiMedia(
-      client: _client,
-      fallbackMxc: uri,
-      metadata: entry.metadata,
-      fallbackEmoji: entry.primaryFallbackEmoji,
+    return MxcImage(
+      uri: uri,
       width: size,
       height: size,
       fit: fit,

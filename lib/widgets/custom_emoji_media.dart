@@ -20,10 +20,10 @@ import 'package:fluffychat/widgets/mxc_image.dart';
 class CustomEmojiAnimatedRenderBudget {
   static int get maxActive {
     if (_maxActiveOverrideForTests != null) return _maxActiveOverrideForTests!;
-    if (PlatformInfos.isAndroid) return 20;
-    if (PlatformInfos.isIOS) return 25;
-    if (PlatformInfos.isWeb) return 15;
-    return 40; // desktop
+    if (PlatformInfos.isAndroid) return 30;
+    if (PlatformInfos.isIOS) return 45;
+    if (PlatformInfos.isWeb) return 45;
+    return 75; // desktop
   }
 
   static final Set<Object> _owners = <Object>{};
@@ -82,10 +82,6 @@ class _LottieCompositionCache {
   }
 }
 
-/// Monitors real frame timings via a sliding window and adaptively throttles
-/// Lottie animations when *sustained* jank is detected. Isolated spikes from
-/// scrolling or chat loads are ignored — only a high ratio of bad frames over
-/// the last ~1 second triggers degradation.
 class AnimationJankMonitor {
   static final instance = AnimationJankMonitor._();
   AnimationJankMonitor._();
@@ -98,19 +94,16 @@ class AnimationJankMonitor {
 
   DateTime _lastDegradeTime = DateTime(2000);
 
-  // --- Tuning knobs ---
-
-  /// Only frames slower than this count as jank. 50 ms ≈ <20 fps — well above
-  /// normal scroll hitches which typically stay under 40 ms.
+  /// Only frames slower than this count as jank. 50 ms ≈ <20 fps
   static const _jankThresholdMs = 50;
 
-  /// Rolling window size (~1 s of frames at 60 fps).
+  /// Rolling window size
   static const _windowSize = 60;
 
-  /// Degrade when more than half the window is janky (sustained overload).
+  /// Degrade when more than N of the window is janky
   static const _degradeRatio = 0.5;
 
-  /// Recover when less than 10 % of the window is janky.
+  /// Recover when less than N % of the window is janky.
   static const _recoverRatio = 0.10;
 
   /// Cooldown between degradation / recovery steps.
@@ -118,13 +111,9 @@ class AnimationJankMonitor {
 
   static const _step = 0.25;
 
-  // --- Sliding window ---
-
   final _window = List<bool>.filled(_windowSize, false);
   int _windowIndex = 0;
   int _jankCount = 0;
-
-  /// Controllers tracked for pause/resume on full stop.
   final Map<AnimationController, bool> _tracked = {};
 
   void ensureListening() {
@@ -144,8 +133,6 @@ class AnimationJankMonitor {
   void _onTimings(List<FrameTiming> timings) {
     for (final timing in timings) {
       final isJank = timing.totalSpan.inMilliseconds > _jankThresholdMs;
-
-      // Evict oldest entry from the window and insert new one.
       if (_window[_windowIndex]) _jankCount--;
       _window[_windowIndex] = isJank;
       if (isJank) _jankCount++;

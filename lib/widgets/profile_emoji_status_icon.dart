@@ -37,7 +37,7 @@ class ProfileEmojiStatusIcon extends StatefulWidget {
 }
 
 class _ProfileEmojiStatusIconState extends State<ProfileEmojiStatusIcon> {
-  late Future<Uri?> _future;
+  late Future<EmojiStatusData?> _future;
 
   @override
   void initState() {
@@ -74,11 +74,12 @@ class _ProfileEmojiStatusIconState extends State<ProfileEmojiStatusIcon> {
     final borderRadius =
         widget.borderRadius ?? BorderRadius.circular(widget.size / 2);
 
-    return FutureBuilder<Uri?>(
+    return FutureBuilder<EmojiStatusData?>(
       future: _future,
       initialData: profileEmojiStatusCache.getCached(widget.userId),
       builder: (context, snapshot) {
-        final emojiUri = snapshot.data;
+        final statusData = snapshot.data;
+        final emojiUri = statusData?.uri;
         if (emojiUri == null && !widget.showPlaceholder) {
           return const SizedBox.shrink();
         }
@@ -87,6 +88,7 @@ class _ProfileEmojiStatusIconState extends State<ProfileEmojiStatusIcon> {
             : CustomEmojiCatalog.fromClient(
                 widget.client,
               ).resolveByMxc(emojiUri);
+        final resolvedMeta = emojiEntry?.metadata ?? statusData?.metadata;
 
         final child = SizedBox(
           width: widget.size,
@@ -95,21 +97,21 @@ class _ProfileEmojiStatusIconState extends State<ProfileEmojiStatusIcon> {
               ? widget.placeholder ?? const SizedBox.shrink()
               : ClipRRect(
                   borderRadius: borderRadius,
-                  child: emojiEntry == null
-                      ? MxcImage(
+                  child: resolvedMeta != null
+                      ? CustomEmojiMedia(
                           key: ValueKey(emojiUri),
-                          uri: emojiUri,
+                          client: widget.client,
+                          fallbackMxc: emojiUri,
+                          metadata: resolvedMeta,
+                          fallbackEmoji: emojiEntry?.primaryFallbackEmoji,
                           width: widget.size,
                           height: widget.size,
                           fit: BoxFit.cover,
                           isThumbnail: false,
                         )
-                      : CustomEmojiMedia(
+                      : MxcImage(
                           key: ValueKey(emojiUri),
-                          client: widget.client,
-                          fallbackMxc: emojiUri,
-                          metadata: emojiEntry.metadata,
-                          fallbackEmoji: emojiEntry.primaryFallbackEmoji,
+                          uri: emojiUri,
                           width: widget.size,
                           height: widget.size,
                           fit: BoxFit.cover,

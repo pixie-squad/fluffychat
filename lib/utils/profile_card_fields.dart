@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'package:matrix/matrix.dart';
 
+import 'package:fluffychat/utils/custom_emoji_metadata.dart';
+
 const String profileBioField = 'r.trd.bio';
 const String profileBackgroundColorField = 'r.trd.profile_bg_color';
 const String profileBannerField = 'r.trd.profile_banner_mxc';
@@ -78,11 +80,19 @@ String? normalizeFeaturedChannelIdentifier(String input) {
   return value;
 }
 
+class EmojiStatusData {
+  final Uri uri;
+  final CustomEmojiMeta? metadata;
+
+  const EmojiStatusData({required this.uri, this.metadata});
+}
+
 class ProfileCardFields {
   final String? bio;
   final Color? backgroundColor;
   final Uri? bannerMxc;
   final Uri? emojiStatusMxc;
+  final EmojiStatusData? emojiStatus;
   final FeaturedChannelProfileField? featuredChannel;
 
   const ProfileCardFields({
@@ -90,30 +100,31 @@ class ProfileCardFields {
     this.backgroundColor,
     this.bannerMxc,
     this.emojiStatusMxc,
+    this.emojiStatus,
     this.featuredChannel,
   });
 }
 
 class _ProfileEmojiStatusCache {
-  final Map<String, Uri?> _cache = {};
-  final Map<String, Future<Uri?>> _inFlight = {};
+  final Map<String, EmojiStatusData?> _cache = {};
+  final Map<String, Future<EmojiStatusData?>> _inFlight = {};
   final ValueNotifier<int> version = ValueNotifier<int>(0);
 
   bool has(String userId) => _cache.containsKey(userId);
 
-  Uri? getCached(String userId) => _cache[userId];
+  EmojiStatusData? getCached(String userId) => _cache[userId];
 
-  Future<Uri?> get(Client client, String userId) {
+  Future<EmojiStatusData?> get(Client client, String userId) {
     if (_cache.containsKey(userId)) {
-      return Future<Uri?>.value(_cache[userId]);
+      return Future<EmojiStatusData?>.value(_cache[userId]);
     }
     final pending = _inFlight[userId];
     if (pending != null) return pending;
 
-    final future = loadProfileEmojiStatus(client, userId).then((uri) {
-      _cache[userId] = uri;
+    final future = loadProfileEmojiStatus(client, userId).then((data) {
+      _cache[userId] = data;
       _inFlight.remove(userId);
-      return uri;
+      return data;
     });
     _inFlight[userId] = future;
     return future;
@@ -139,11 +150,7 @@ Future<ProfileCardFields> loadProfileCardFields(
     profileBackgroundColorField,
   );
   final bannerRaw = await _loadProfileField(client, userId, profileBannerField);
-  final emojiRaw = await _loadProfileField(
-    client,
-    userId,
-    profileEmojiStatusField,
-  );
+  final emojiStatus = await loadProfileEmojiStatus(client, userId);
   final featuredRaw = await _loadProfileField(
     client,
     userId,
@@ -154,18 +161,54 @@ Future<ProfileCardFields> loadProfileCardFields(
     bio: _readStringField(bioRaw),
     backgroundColor: _readBackgroundColorField(backgroundRaw),
     bannerMxc: _readMxcUriField(bannerRaw),
-    emojiStatusMxc: _readMxcUriField(emojiRaw),
+    emojiStatusMxc: emojiStatus?.uri,
+    emojiStatus: emojiStatus,
     featuredChannel: _readFeaturedChannelField(featuredRaw),
   );
 }
 
-Future<Uri?> loadProfileEmojiStatus(Client client, String userId) async {
-  final emojiRaw = await _loadProfileField(
-    client,
-    userId,
-    profileEmojiStatusField,
-  );
-  return _readMxcUriField(emojiRaw);
+Future<EmojiStatusData?> loadProfileEmojiStatus(
+  Client client,
+  String userId,
+) async {
+  final data = await _loadProfileFieldRaw(client, userId, profileEmojiStatusField);
+  if (data == null) return null;
+  final fieldValue = data[profileEmojiStatusField];
+
+  // New format: value is an object {"url": "mxc://...", "image": {...}}
+  if (fieldValue is Map) {
+    final urlStr = fieldValue['url'];
+    final uri = urlStr is String ? Uri.tryParse(urlStr) : null;
+    if (uri == null || uri.scheme != 'mxc') return null;
+    CustomEmojiMeta? metadata;
+    final imageJson = fieldValue['image'];
+    if (imageJson is Map) {
+      try {
+        final image = ImagePackImageContent.fromJson(
+          Map<String, Object?>.from(imageJson),
+        );
+        metadata = CustomEmojiMeta.fromImage(image);
+      } catch (_) {}
+    }
+    return EmojiStatusData(uri: uri, metadata: metadata);
+  }
+
+  // Old format: value is a plain mxc:// string
+  final uri = _readMxcUriField(fieldValue);
+  if (uri == null) return null;
+  return EmojiStatusData(uri: uri);
+}
+
+Future<Map<String, Object?>?> _loadProfileFieldRaw(
+  Client client,
+  String userId,
+  String key,
+) async {
+  try {
+    return await client.getProfileField(userId, key);
+  } catch (_) {
+    return null;
+  }
 }
 
 Future<Object?> _loadProfileField(
@@ -173,12 +216,8 @@ Future<Object?> _loadProfileField(
   String userId,
   String key,
 ) async {
-  try {
-    final data = await client.getProfileField(userId, key);
-    return data[key];
-  } catch (_) {
-    return null;
-  }
+  final data = await _loadProfileFieldRaw(client, userId, key);
+  return data?[key];
 }
 
 String? _readStringField(Object? raw) {

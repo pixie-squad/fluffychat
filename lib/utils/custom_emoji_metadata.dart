@@ -3,6 +3,7 @@ import 'package:matrix/matrix.dart';
 const String customEmojiMetaKey = 'im.fluffychat.meta';
 const String customEmojiPackOrderKey = 'im.fluffychat.order';
 const String customEmojiSourceBodyKey = 'im.fluffychat.source_body';
+const String customEmojiEmbeddedKey = 'im.fluffychat.emojis';
 
 enum CustomEmojiMediaKind { image, webm, mp4, lottieJson, lottieTgs }
 

@@ -10,6 +10,7 @@ import 'package:matrix/matrix.dart';
 
 import 'package:fluffychat/utils/code_highlight_theme.dart';
 import 'package:fluffychat/utils/custom_emoji_catalog.dart';
+import 'package:fluffychat/utils/custom_emoji_metadata.dart';
 import 'package:fluffychat/utils/event_checkbox_extension.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/custom_emoji_media.dart';
@@ -27,6 +28,7 @@ class HtmlMessage extends StatelessWidget {
   final String? eventId;
   final Set<Event>? checkboxCheckedEvents;
   final bool limitHeight;
+  final Map<String, Object?>? embeddedEmojis;
 
   late final CustomEmojiCatalog _customEmojiCatalog =
       CustomEmojiCatalog.fromRoom(room, usage: ImagePackUsage.emoticon);
@@ -42,6 +44,7 @@ class HtmlMessage extends StatelessWidget {
     this.eventId,
     this.checkboxCheckedEvents,
     this.limitHeight = true,
+    this.embeddedEmojis,
   });
 
   /// Keep in sync with: https://spec.matrix.org/latest/client-server-api/#mroommessage-msgtypes
@@ -395,24 +398,49 @@ class HtmlMessage extends StatelessWidget {
             ? _customEmojiCatalog.resolveByMxc(mxcUrl)
             : null;
 
+        // If the local catalog doesn't have this emoji, try embedded metadata
+        // from the event content (so receivers without the pack can render it).
+        CustomEmojiMeta? embeddedMeta;
+        if (emoticonEntry == null && isEmoticon) {
+          final raw = embeddedEmojis?[mxcUrl.toString()];
+          if (raw is Map) {
+            try {
+              final image = ImagePackImageContent.fromJson(
+                Map<String, Object?>.from(raw),
+              );
+              embeddedMeta = CustomEmojiMeta.fromImage(image);
+            } catch (_) {}
+          }
+        }
+
         return WidgetSpan(
           child: SizedBox(
             width: actualWidth,
             height: actualHeight,
-            child: emoticonEntry == null
-                ? MxcImage(
-                    uri: mxcUrl,
-                    width: actualWidth,
-                    height: actualHeight,
-                    isThumbnail: (actualWidth * actualHeight) > (256 * 256),
-                  )
-                : CustomEmojiMedia(
+            child: emoticonEntry != null
+                ? CustomEmojiMedia(
                     client: room.client,
                     fallbackMxc: emoticonEntry.primaryMxc,
                     metadata: emoticonEntry.metadata,
                     fallbackEmoji:
                         emoticonEntry.primaryFallbackEmoji ??
                         node.attributes['alt'],
+                    width: actualWidth,
+                    height: actualHeight,
+                    isThumbnail: (actualWidth * actualHeight) > (256 * 256),
+                  )
+                : embeddedMeta != null
+                ? CustomEmojiMedia(
+                    client: room.client,
+                    fallbackMxc: mxcUrl,
+                    metadata: embeddedMeta,
+                    fallbackEmoji: node.attributes['alt'],
+                    width: actualWidth,
+                    height: actualHeight,
+                    isThumbnail: (actualWidth * actualHeight) > (256 * 256),
+                  )
+                : MxcImage(
+                    uri: mxcUrl,
                     width: actualWidth,
                     height: actualHeight,
                     isThumbnail: (actualWidth * actualHeight) > (256 * 256),

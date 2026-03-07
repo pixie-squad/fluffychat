@@ -16,6 +16,7 @@ import 'package:fluffychat/utils/date_time_extension.dart';
 import 'package:fluffychat/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:fluffychat/widgets/avatar.dart';
 import 'package:fluffychat/widgets/matrix.dart';
+import 'package:fluffychat/utils/custom_emoji_metadata.dart';
 import '../../../config/app_config.dart';
 import '../../../utils/event_checkbox_extension.dart';
 import '../../../utils/platform_infos.dart';
@@ -283,6 +284,8 @@ class MessageContent extends StatelessWidget {
                 ),
                 onOpen: (url) => UrlLauncher(context, url.url).launchUrl(),
                 eventId: event.eventId,
+                embeddedEmojis: event.content
+                    .tryGetMap<String, Object?>(customEmojiEmbeddedKey),
                 checkboxCheckedEvents: event.aggregatedEvents(
                   timeline,
                   EventCheckboxRoomExtension.relationshipType,

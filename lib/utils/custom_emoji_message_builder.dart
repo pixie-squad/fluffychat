@@ -35,6 +35,7 @@ CustomEmojiMessageBuildResult buildCustomEmojiMessage({
   final body = _buildFallbackBody(sourceBody, catalog);
 
   String? formattedBody;
+  Map<String, Object?>? embeddedEmojis;
   if (parseMarkdown) {
     final html = matrix_markdown.markdown(
       sourceBody,
@@ -42,13 +43,17 @@ CustomEmojiMessageBuildResult buildCustomEmojiMessage({
       getMention: room.getMention,
       convertLinebreaks: room.client.convertLinebreaksInFormatting,
     );
-    formattedBody = _patchEmojiFallbackInHtml(html, catalog, sourceBody);
+    final patchResult = _patchEmojiFallbackInHtml(html, catalog, sourceBody);
+    formattedBody = patchResult.html;
+    embeddedEmojis = patchResult.embeddedEmojis;
   }
 
   final content = <String, dynamic>{
     'msgtype': msgtype,
     'body': body,
     customEmojiSourceBodyKey: sourceBody,
+    if (embeddedEmojis != null && embeddedEmojis.isNotEmpty)
+      customEmojiEmbeddedKey: embeddedEmojis,
   };
 
   final mentions = addMentions
@@ -89,25 +94,40 @@ String _buildFallbackBody(String sourceBody, CustomEmojiCatalog catalog) {
   return output.toString();
 }
 
-String _patchEmojiFallbackInHtml(
+class _PatchResult {
+  final String html;
+  final Map<String, Object?> embeddedEmojis;
+  const _PatchResult(this.html, this.embeddedEmojis);
+}
+
+_PatchResult _patchEmojiFallbackInHtml(
   String html,
   CustomEmojiCatalog catalog,
   String sourceBody,
 ) {
   final fragment = html_parser.parseFragment(html);
+  final embedded = <String, Object?>{};
 
   for (final img in fragment.querySelectorAll('img[data-mx-emoticon]')) {
     final src = Uri.tryParse(img.attributes['src'] ?? '');
     if (src == null) continue;
     final entry = catalog.resolveByMxc(src);
-    final fallback = entry?.primaryFallbackEmoji;
-    if (fallback == null || fallback.isEmpty) continue;
-    img.attributes['alt'] = fallback;
-    img.attributes['title'] = fallback;
+    if (entry == null) continue;
+    final fallback = entry.primaryFallbackEmoji;
+    if (fallback != null && fallback.isNotEmpty) {
+      img.attributes['alt'] = fallback;
+      img.attributes['title'] = fallback;
+    }
+    // Embed image metadata so receivers without the pack can render it.
+    final imageJson = entry.image.toJson();
+    embedded[src.toString()] = imageJson;
   }
 
   final serialized = _serializeFragment(fragment);
-  return serialized.isNotEmpty ? serialized : sourceBody;
+  return _PatchResult(
+    serialized.isNotEmpty ? serialized : sourceBody,
+    embedded,
+  );
 }
 
 Map<String, dynamic>? _buildMentions(
