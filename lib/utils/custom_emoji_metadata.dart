@@ -163,8 +163,8 @@ class CustomEmojiMeta {
 
     final orderRaw = metaJson['order'];
     final order = switch (orderRaw) {
-      int value => value,
-      String value => int.tryParse(value) ?? 0,
+      final int value => value,
+      final String value => int.tryParse(value) ?? 0,
       _ => 0,
     };
 
@@ -249,8 +249,8 @@ ImagePackImageContent applyCustomEmojiMeta(
 int getCustomEmojiPackOrder(ImagePackContent pack) {
   final value = pack.toJson()[customEmojiPackOrderKey];
   return switch (value) {
-    int number => number,
-    String stringValue => int.tryParse(stringValue) ?? 0,
+    final int number => number,
+    final String stringValue => int.tryParse(stringValue) ?? 0,
     _ => 0,
   };
 }

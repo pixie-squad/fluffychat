@@ -117,6 +117,8 @@ class ChatController extends State<ChatPageWithRoom>
 
   String? activeThreadId;
 
+  int? animateInEventIndex;
+
   late final Set<String> bigEmojis;
 
   late final String readMarkerEventId;

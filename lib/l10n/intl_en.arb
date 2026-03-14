@@ -2828,5 +2828,8 @@
     "iDoNotWantToSupport": "I do not want to support",
     "iAlreadySupportFluffyChat": "I already support FluffyChat",
     "setLowPriority": "Set low priority",
-    "unsetLowPriority": "Unset low priority"
+    "unsetLowPriority": "Unset low priority",
+    "sendOriginal": "Send original",
+    "profileNotFound": "Profile not found",
+    "confirm": "Confirm"
 }

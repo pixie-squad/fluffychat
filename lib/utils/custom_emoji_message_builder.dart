@@ -135,7 +135,7 @@ Map<String, dynamic>? _buildMentions(
   String sourceBody, {
   Event? inReplyTo,
 }) {
-  var potentialMentions = sourceBody
+  final potentialMentions = sourceBody
       .split('@')
       .map(
         (text) => text.startsWith('[')
@@ -176,8 +176,8 @@ Map<String, dynamic>? _buildMentions(
 String _serializeFragment(dom.DocumentFragment fragment) => fragment.nodes
     .map(
       (node) => switch (node) {
-        dom.Element element => element.outerHtml,
-        dom.Text text => text.text,
+        final dom.Element element => element.outerHtml,
+        final dom.Text text => text.text,
         _ => node.text,
       },
     )

@@ -46,7 +46,7 @@ class PendingMediaPreview extends StatelessWidget {
                       vertical: 8,
                     ),
                     itemCount: files.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    separatorBuilder: (_, _) => const SizedBox(width: 8),
                     itemBuilder: (context, index) => _MediaThumbnail(
                       file: files[index],
                       onRemove: () => controller.removePendingMedia(index),
@@ -240,7 +240,7 @@ class _MediaThumbnail extends StatelessWidget {
                           width: PendingMediaPreview._thumbnailSize,
                           height: PendingMediaPreview._thumbnailSize,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Center(
+                          errorBuilder: (_, _, _) => Center(
                             child: Icon(
                               Icons.broken_image_outlined,
                               color: theme.colorScheme.onSurfaceVariant,

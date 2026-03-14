@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'package:animations/animations.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:emoji_picker_flutter/locales/default_emoji_set_locale.dart';
 import 'package:matrix/matrix.dart';

@@ -270,10 +270,10 @@ class _ArchiveFilePreview extends StatelessWidget {
     final normalizedMime = (mimeType ?? lookupMimeType(name) ?? '')
         .toLowerCase();
     final icon = switch (normalizedMime) {
-      String mime when mime.startsWith('video/') => Icons.videocam_outlined,
-      String mime when mime.contains('json') || mime.contains('lottie') =>
+      final String mime when mime.startsWith('video/') => Icons.videocam_outlined,
+      final String mime when mime.contains('json') || mime.contains('lottie') =>
         Icons.animation_outlined,
-      String mime when mime.contains('gzip') => Icons.archive_outlined,
+      final String mime when mime.contains('gzip') => Icons.archive_outlined,
       _ => Icons.insert_drive_file_outlined,
     };
 

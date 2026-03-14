@@ -44,13 +44,13 @@ class CustomEmojiAnimatedRenderBudget {
   @visibleForTesting
   static int get activeCountForTests => _owners.length;
 
-  @visibleForTesting
   static int? _maxActiveOverrideForTests;
 
   @visibleForTesting
   static void resetForTests({int? maxActiveOverride}) {
     _owners.clear();
     _maxActiveOverrideForTests = maxActiveOverride;
+    _LottieCompositionCache.resetForTests();
   }
 }
 
@@ -423,7 +423,7 @@ class _LoopingVideoEmojiState extends State<_LoopingVideoEmoji> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final tickerEnabled = TickerMode.of(context);
+    final tickerEnabled = TickerMode.valuesOf(context).enabled;
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
     if (!tickerEnabled && controller.value.isPlaying) {

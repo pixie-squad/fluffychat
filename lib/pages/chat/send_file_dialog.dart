@@ -86,7 +86,7 @@ class SendFileDialogState extends State<SendFileDialog> {
       if (useAlbum) {
         for (var i = 0; i < widget.files.length; i++) {
           final chunkIndex = i ~/ maxAlbumSize;
-          albumIds.putIfAbsent(chunkIndex, () => _generateAlbumId());
+          albumIds.putIfAbsent(chunkIndex, _generateAlbumId);
         }
       }
 
