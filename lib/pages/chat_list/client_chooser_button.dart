@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
-import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/user_dialog.dart';
@@ -71,17 +70,6 @@ class ClientChooserButton extends StatelessWidget {
           ],
         ),
       ),
-      if (Matrix.of(context).backgroundPush?.firebaseEnabled != true)
-        PopupMenuItem(
-          value: SettingsAction.support,
-          child: Row(
-            children: [
-              const Icon(Icons.favorite, color: Colors.red),
-              const SizedBox(width: 18),
-              Text(L10n.of(context).donate),
-            ],
-          ),
-        ),
       PopupMenuItem(
         value: SettingsAction.settings,
         child: Row(
@@ -89,6 +77,16 @@ class ClientChooserButton extends StatelessWidget {
             const Icon(Icons.settings_outlined),
             const SizedBox(width: 18),
             Text(L10n.of(context).settings),
+          ],
+        ),
+      ),
+      PopupMenuItem(
+        value: SettingsAction.support,
+        child: Row(
+          children: [
+            Icon(Icons.favorite, color: Colors.red),
+            const SizedBox(width: 18),
+            Text(L10n.of(context).supportFluffyChat),
           ],
         ),
       ),
@@ -177,18 +175,23 @@ class ClientChooserButton extends StatelessWidget {
         clipBehavior: Clip.hardEdge,
         borderRadius: BorderRadius.circular(99),
         color: Colors.transparent,
-        child: PopupMenuButton<Object>(
-          popUpAnimationStyle: FluffyThemes.isColumnMode(context)
-              ? AnimationStyle.noAnimation
-              : null, // https://github.com/flutter/flutter/issues/167180
-          onSelected: (o) => _clientSelected(o, context),
-          itemBuilder: _bundleMenuItems,
-          child: Center(
-            child: Avatar(
-              mxContent: snapshot.data?.avatarUrl,
-              name:
-                  snapshot.data?.displayName ?? matrix.client.userID?.localpart,
-              size: 32,
+        child: Semantics(
+          identifier: 'accounts_and_settings',
+          child: PopupMenuButton<Object>(
+            tooltip: 'Accounts and settings',
+            popUpAnimationStyle: FluffyThemes.isColumnMode(context)
+                ? AnimationStyle.noAnimation
+                : null, // https://github.com/flutter/flutter/issues/167180
+            onSelected: (o) => _clientSelected(o, context),
+            itemBuilder: _bundleMenuItems,
+            child: Center(
+              child: Avatar(
+                mxContent: snapshot.data?.avatarUrl,
+                name:
+                    snapshot.data?.displayName ??
+                    matrix.client.userID?.localpart,
+                size: 32,
+              ),
             ),
           ),
         ),
@@ -230,7 +233,9 @@ class ClientChooserButton extends StatelessWidget {
           FluffyShare.shareInviteLink(context);
           break;
         case SettingsAction.support:
-          launchUrlString(AppConfig.donationUrl);
+          launchUrlString(
+            'https://fluffychat.im/faq/#how_can_i_support_fluffychat',
+          );
           break;
         case SettingsAction.settings:
           context.go('/rooms/settings');

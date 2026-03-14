@@ -58,7 +58,20 @@ enum AppSettings<T> {
   welcomeText<String>('chat.fluffy.welcome_text', ''),
   compressMedia<bool>('chat.fluffy.compress_media', true),
   groupAsAlbum<bool>('chat.fluffy.group_as_album', true),
-  customEmojiRecents<String>('chat.fluffy.custom_emoji_recents', '');
+  customEmojiRecents<String>('chat.fluffy.custom_emoji_recents', ''),
+  website<String>('chat.fluffy.website_url', 'https://fluffychat.im'),
+  logoUrl<String>(
+    'chat.fluffy.logo_url',
+    'https://fluffychat.im/assets/favicon.png',
+  ),
+  privacyPolicy<String>(
+    'chat.fluffy.privacy_policy_url',
+    'https://fluffychat.im/en/privacy',
+  ),
+  tos<String>('chat.fluffy.tos_url', 'https://fluffychat.im/en/tos'),
+  sendTimelineEventTimeout<int>('chat.fluffy.send_timeline_event_timeout', 15),
+  lastSeenSupportBanner<int>('chat.fluffy.last_seen_support_banner', 0),
+  supportBannerOptOut<bool>('chat.fluffy.support_banner_opt_out', false);
 
   final String key;
   final T defaultValue;
@@ -67,6 +80,11 @@ enum AppSettings<T> {
 
   static SharedPreferences get store => _store!;
   static SharedPreferences? _store;
+
+  static Future<void> reset({bool loadWebConfigFile = true}) async {
+    await AppSettings._store!.clear();
+    await init(loadWebConfigFile: loadWebConfigFile);
+  }
 
   static Future<SharedPreferences> init({bool loadWebConfigFile = true}) async {
     if (AppSettings._store != null) return AppSettings.store;

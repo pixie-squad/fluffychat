@@ -10,7 +10,6 @@ import 'package:just_audio/just_audio.dart';
 import 'package:matrix/matrix.dart';
 import 'package:opus_caf_converter_dart/opus_caf_converter_dart.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:universal_html/html.dart' as html;
 
 import 'package:fluffychat/config/app_config.dart';
 import 'package:fluffychat/config/themes.dart';
@@ -166,11 +165,11 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
             : null,
       );
 
-      if (!kIsWeb) {
+      final attachmentUrl = widget.event.attachmentOrThumbnailMxcUrl();
+
+      if (!kIsWeb && attachmentUrl != null) {
         final tempDir = await getTemporaryDirectory();
-        final fileName = Uri.encodeComponent(
-          widget.event.attachmentOrThumbnailMxcUrl()!.pathSegments.last,
-        );
+        final fileName = Uri.encodeComponent(attachmentUrl.pathSegments.last);
         file = File('${tempDir.path}/${fileName}_${matrixFile.name}');
 
         await file.writeAsBytes(matrixFile.bytes);
@@ -203,12 +202,12 @@ class AudioPlayerState extends State<AudioPlayerWidget> {
 
     if (file != null) {
       audioPlayer.setFilePath(file.path);
-    } else if (kIsWeb) {
-      final blob = html.Blob([matrixFile.bytes], 'audio/mpeg');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      await audioPlayer.setAudioSource(AudioSource.uri(Uri.parse(url)));
     } else {
-      throw Exception('No audio file provided!');
+      await audioPlayer.setAudioSource(
+        AudioSource.uri(
+          Uri.dataFromBytes(matrixFile.bytes, mimeType: matrixFile.mimeType),
+        ),
+      );
     }
 
     audioPlayer.play().onError(

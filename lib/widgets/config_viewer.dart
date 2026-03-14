@@ -16,6 +16,8 @@ class ConfigViewer extends StatefulWidget {
 }
 
 class _ConfigViewerState extends State<ConfigViewer> {
+  String _searchQuery = '';
+
   Future<void> _changeSetting(
     AppSettings appSetting,
     SharedPreferences store,
@@ -48,15 +50,32 @@ class _ConfigViewerState extends State<ConfigViewer> {
     setState(() {});
   }
 
+  Future<void> _reset() async {
+    await AppSettings.reset();
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final normalizedQuery = _searchQuery.trim().toLowerCase();
+    final filteredSettings = AppSettings.values
+        .where((setting) {
+          if (normalizedQuery.isEmpty) return true;
+          return setting.name.toLowerCase().contains(normalizedQuery);
+        })
+        .toList(growable: false);
+
     return Scaffold(
       appBar: AppBar(
         title: Text(L10n.of(context).advancedConfigurations),
         leading: BackButton(onPressed: () => context.go('/')),
+        actions: [
+          TextButton(onPressed: _reset, child: Text(L10n.of(context).reset)),
+        ],
       ),
       body: Column(
+        crossAxisAlignment: .stretch,
         children: [
           Container(
             margin: const EdgeInsets.all(16),
@@ -67,12 +86,29 @@ class _ConfigViewerState extends State<ConfigViewer> {
               style: TextStyle(color: theme.colorScheme.onErrorContainer),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              onChanged: (value) => setState(() => _searchQuery = value),
+              decoration: InputDecoration(
+                hintText: 'Search config key',
+                prefixIcon: const Icon(Icons.search),
+                border: const OutlineInputBorder(),
+                isDense: true,
+                filled: true,
+                fillColor: theme.colorScheme.surfaceContainerHighest.withAlpha(
+                  128,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
           Expanded(
             child: ListView.builder(
-              itemCount: AppSettings.values.length,
+              itemCount: filteredSettings.length,
               itemBuilder: (context, i) {
                 final store = Matrix.of(context).store;
-                final appSetting = AppSettings.values[i];
+                final appSetting = filteredSettings[i];
                 var value = '';
                 if (appSetting is AppSettings<String>) {
                   value = appSetting.value;
@@ -81,7 +117,13 @@ class _ConfigViewerState extends State<ConfigViewer> {
                   value = appSetting.value.toString();
                 }
                 if (appSetting is AppSettings<bool>) {
-                  value = appSetting.value.toString();
+                  return SwitchListTile.adaptive(
+                    title: Text(appSetting.name),
+                    subtitle: Text(value),
+                    value: appSetting.value,
+                    onChanged: (value) =>
+                        _changeSetting(appSetting, store, (!value).toString()),
+                  );
                 }
                 if (appSetting is AppSettings<double>) {
                   value = appSetting.value.toString();

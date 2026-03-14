@@ -182,16 +182,13 @@ class ChatEventList extends StatelessWidget {
             eventId: event.eventId,
             controller: controller,
             child: AutoScrollTag(
-              key: ValueKey(event.eventId),
+              key: ValueKey(event.transactionId ?? event.eventId),
               index: i,
               controller: controller.scrollController,
               child: Message(
                 event,
                 bigEmojis: controller.bigEmojis,
                 animateIn: animateIn,
-                resetAnimateIn: () {
-                  controller.animateInEventIndex = null;
-                },
                 onSwipe: () => controller.replyAction(replyTo: event),
                 onInfoTab: controller.showEventInfo,
                 onMention: () => controller.sendController.text +=
