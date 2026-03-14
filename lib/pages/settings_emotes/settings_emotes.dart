@@ -22,6 +22,8 @@ import 'package:fluffychat/utils/platform_infos.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:fluffychat/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:fluffychat/widgets/future_loading_dialog.dart';
+import 'package:fluffychat/widgets/room_picker_dialog.dart';
+import 'package:fluffychat/utils/adaptive_bottom_sheet.dart';
 import '../../widgets/matrix.dart';
 import 'import_archive_dialog.dart';
 import 'settings_emotes_view.dart';
@@ -509,25 +511,20 @@ class EmotesSettingsController extends State<EmotesSettings> {
 
   Future<void> sharePackToRoomAction() async {
     final client = Matrix.of(context).client;
-    final target = await showTextInputDialog(
-      context: context,
-      title: 'Share pack to room',
-      hintText: '#room:example.org / !roomId:example.org',
-      okLabel: L10n.of(context).share,
-      cancelLabel: L10n.of(context).cancel,
-    );
-    final roomIdentifier = target?.trim();
-    if (roomIdentifier == null || roomIdentifier.isEmpty) return;
 
-    final targetRoom = roomIdentifier.sigil == '!'
-        ? client.getRoomById(roomIdentifier)
-        : client.getRoomByAlias(roomIdentifier);
-    if (targetRoom == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Room not found in current account')),
-      );
-      return;
-    }
+    final targetRoom = await showAdaptiveBottomSheet<Room>(
+      context: context,
+      builder: (context) => RoomPickerDialog(
+        title: L10n.of(context).sharePackToRoom,
+        roomFilter: (room) =>
+            room.canChangeStateEvent('im.ponies.room_emotes') &&
+            !room.isSpace &&
+            room.membership == Membership.join,
+      ),
+    );
+
+    if (targetRoom == null) return;
+    if (!mounted) return;
 
     final baseStateKey = stateKey;
     final displayName = pack?.pack.displayName?.trim().isNotEmpty == true

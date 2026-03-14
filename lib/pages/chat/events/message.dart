@@ -26,6 +26,7 @@ import 'media_album.dart';
 import 'message_content.dart';
 import 'message_reactions.dart';
 import 'reply_content.dart';
+import 'pack_share_message.dart';
 import 'state_message.dart';
 
 class Message extends StatelessWidget {
@@ -116,6 +117,9 @@ class Message extends StatelessWidget {
     }.contains(event.type)) {
       if (event.type.startsWith('m.call.')) {
         return const SizedBox.shrink();
+      }
+      if (event.type == 'im.ponies.room_emotes') {
+        return PackShareMessage(event);
       }
       return StateMessage(event, onExpand: onExpand, isCollapsed: isCollapsed);
     }

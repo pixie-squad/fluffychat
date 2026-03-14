@@ -36,7 +36,7 @@ extension IsStateExtension on Event {
       // if we enabled to hide all redacted events, don't show those
       (!AppSettings.hideRedactedEvents.value || !redacted) &&
       // if we enabled to hide all unknown events, don't show those
-      (!AppSettings.hideUnknownEvents.value || isEventTypeKnown);
+      (!AppSettings.hideUnknownEvents.value || isEventTypeKnown || type == 'im.ponies.room_emotes');
 
   bool get isState => !{
     EventTypes.Message,

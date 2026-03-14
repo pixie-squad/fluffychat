@@ -90,9 +90,9 @@ class EmotesSettingsView extends StatelessWidget {
                     child: Text(L10n.of(context).exportEmotePack),
                   ),
                 if (imageKeys.isNotEmpty)
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: PopupMenuEmojiActions.shareToRoom,
-                    child: Text('Share pack to room'),
+                    child: Text(L10n.of(context).sharePackToRoom),
                   ),
               ],
             ),

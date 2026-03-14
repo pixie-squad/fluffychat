@@ -2175,6 +2175,33 @@
             }
         }
     },
+    "userSharedStickerPack": "{username} shared a sticker pack: {packName}",
+    "@userSharedStickerPack": {
+        "type": "String",
+        "placeholders": {
+            "username": {
+                "type": "String"
+            },
+            "packName": {
+                "type": "String"
+            }
+        }
+    },
+    "importStickerPack": "Add to your emojis",
+    "@importStickerPack": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "alreadyImported": "Already added",
+    "@alreadyImported": {
+        "type": "String",
+        "placeholders": {}
+    },
+    "sharePackToRoom": "Share pack to room",
+    "@sharePackToRoom": {
+        "type": "String",
+        "placeholders": {}
+    },
     "unverified": "Unverified",
     "verified": "Verified",
     "@verified": {
